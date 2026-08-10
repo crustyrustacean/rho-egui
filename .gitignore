@@ -1,0 +1,8 @@
+# rho-egui gitignore configuration
+
+# Rho coding agent
+.rho
+logs
+
+# Build artifacts
+/target
