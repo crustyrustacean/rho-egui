@@ -36,20 +36,20 @@ rho-egui
 ├── src/
 │   ├── main.rs          — Entry point, eframe setup
 │   ├── app.rs           — Main app state, event handling, UI layout
+│   ├── agent.rs         — RhoAgent: subprocess management (module root)
 │   ├── agent/
-│   │   ├── mod.rs       — RhoAgent: subprocess management
 │   │   ├── process.rs   — Async stdin/stdout I/O via pollster
 │   │   └── protocol.rs  — JSON-RPC notification parsing, RhoEvent enum
+│   ├── chat.rs          — ChatBlock types, ApprovalResolution, ToolStatus
 │   ├── chat/
-│   │   ├── mod.rs       — ChatBlock types, ApprovalResolution, ToolStatus
 │   │   └── store.rs     — In-memory chat store with streaming support
+│   ├── ui.rs            — Module root
 │   ├── ui/
-│   │   ├── mod.rs
 │   │   ├── chat_view.rs — Block rendering, approval controls, redirect box
 │   │   ├── modals.rs    — Model picker, session picker, stats, help dialogs
 │   │   └── widgets.rs   — Shared state for model/session/provider lists
+│   ├── util.rs          — Module root
 │   └── util/
-│       ├── mod.rs
 │       ├── formatting.rs — Duration formatting, session stats formatting
 │       └── json.rs       — Safe JSON field access helpers
 ```
