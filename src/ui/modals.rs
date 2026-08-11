@@ -13,6 +13,7 @@ pub(crate) enum ModalId {
     ProviderInfo,
     Stats,
     Help,
+    Context,
     ResumeConfirm(String, u64, u64),
 }
 
@@ -171,7 +172,43 @@ pub(crate) fn resume_confirm(ui: &mut Ui, path: &str, mtime_secs: u64, entry_cou
     });
 }
 
-// ── Shared modal frame ────────────────────────────────────────────────────
+/// Action returned from the context management modal.
+#[derive(Clone, Debug)]
+pub(crate) enum ContextAction {
+    Compact,
+    Clear,
+    NewSession,
+}
+
+/// Render the context management modal.
+/// Returns `Some(action)` if an action button was clicked (modal should close).
+/// Returns `None` if no action was taken this frame.
+pub(crate) fn context_modal(ui: &mut Ui, body: &str) -> Option<ContextAction> {
+    let mut action = None;
+    modal_frame(ui, |ui| {
+        ui.set_min_width(500.0);
+        ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), "Context management");
+        egui::ScrollArea::vertical()
+            .max_height(450.0)
+            .show(ui, |ui| {
+                ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), body);
+            });
+        ui.horizontal(|ui| {
+            if ui.button("Compact").clicked() {
+                action = Some(ContextAction::Compact);
+            }
+            if ui.button("Clear").clicked() {
+                action = Some(ContextAction::Clear);
+            }
+            if ui.button("New Session").clicked() {
+                action = Some(ContextAction::NewSession);
+            }
+        });
+    });
+    action
+}
+
+// ── Shared modal frame
 
 fn modal_frame(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
     let frame = Frame {

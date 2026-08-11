@@ -13,6 +13,9 @@ pub(crate) enum RequestKind {
     ResumeSession,
     ReloadExtensions,
     ListExtensions,
+    Compact,
+    Clear,
+    NewSession,
 }
 
 #[derive(Clone, Debug)]

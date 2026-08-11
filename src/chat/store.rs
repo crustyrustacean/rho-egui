@@ -9,6 +9,9 @@ pub(crate) fn snapshot() -> Vec<ChatBlock> {
     CHAT_BLOCKS.read().unwrap().clone()
 }
 
+pub(crate) fn clear() {
+    CHAT_BLOCKS.write().unwrap().clear();
+}
 pub(crate) fn push(block: ChatBlock) {
     CHAT_BLOCKS.write().unwrap().push(block);
 }

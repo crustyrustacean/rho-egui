@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use crate::agent::{RhoAgent, RhoEvent};
 use crate::chat::{ApprovalResolution, ChatBlock, ToolStatus, store as chat_store};
 use crate::ui::chat_view::{BlockAction, render_block};
-use crate::ui::modals::ModalId;
+use crate::ui::modals::{ContextAction, ModalId};
 use crate::ui::widgets;
-use crate::util::formatting::{format_secs, format_session_stats};
+use crate::util::formatting::{format_secs, format_session_stats, format_usage_stats};
 use crate::util::json::{jbool, jf64, jstr, ju64};
 
 pub struct App {
@@ -39,6 +39,12 @@ pub struct App {
 
     // "Resume Last" flag — next ListSessions response opens ResumeConfirm
     resume_latest_requested: bool,
+
+    // Context modal flag — next GetSessionStats response opens Context modal
+    context_modal_requested: bool,
+
+    // Context modal body cache
+    context_body: String,
 
     // Redirect input text per approval block index
     redirect_texts: HashMap<usize, String>,
@@ -75,6 +81,8 @@ impl Default for App {
             stats_body: String::new(),
             open_modal: ModalId::None,
             resume_latest_requested: false,
+            context_modal_requested: false,
+            context_body: String::new(),
             redirect_texts: HashMap::new(),
             agent_spawned: false,
         }
@@ -355,6 +363,13 @@ impl App {
                 self.usage.ctx_window = ju64(Some(&result), "contextWindow");
                 self.usage.util = ju64(Some(&result), "utilizationPercent").min(255) as u8;
                 self.stats_body = format_session_stats(&result);
+                // Context modal: same response feeds this modal
+                // when the user opened it via the Context button.
+                if self.context_modal_requested {
+                    self.context_modal_requested = false;
+                    self.context_body = self.stats_body.clone();
+                    self.open_modal = ModalId::Context;
+                }
             }
             RequestKind::ReloadExtensions => {
                 let reloaded = ju64(Some(&result), "reloaded");
@@ -394,6 +409,26 @@ impl App {
                 };
                 self.stats_body = body;
                 self.open_modal = ModalId::Stats;
+            }
+            RequestKind::Compact => {
+                self.push_block(ChatBlock::Info("✓ compacted".into()));
+                if let Some(agent) = &mut self.agent {
+                    let _ = agent.get_session_stats();
+                }
+            }
+            RequestKind::Clear => {
+                chat_store::clear();
+                self.push_block(ChatBlock::Info("✓ conversation cleared".into()));
+                if let Some(agent) = &mut self.agent {
+                    let _ = agent.get_session_stats();
+                }
+            }
+            RequestKind::NewSession => {
+                chat_store::clear();
+                self.push_block(ChatBlock::Info("✓ new session".into()));
+                if let Some(agent) = &mut self.agent {
+                    let _ = agent.get_session_stats();
+                }
             }
         }
     }
@@ -556,6 +591,25 @@ impl eframe::App for App {
                             self.push_block(ChatBlock::Info("Reloading extensions…".into()));
                         } else {
                             self.push_block(ChatBlock::Info("not connected.".into()));
+                        }
+                    }
+                    if btn(ui, "Context") {
+                        if self.busy {
+                            // Render from cached usage data so the modal opens instantly
+                            let u = &self.usage;
+                            self.context_body = format_usage_stats(
+                                u.input, u.output, u.cached, u.cost,
+                                u.ctx_used, u.ctx_window, u.util,
+                            );
+                            self.open_modal = ModalId::Context;
+                        } else {
+                            match &mut self.agent {
+                                Some(agent) => {
+                                    self.context_modal_requested = true;
+                                    let _ = agent.get_session_stats();
+                                }
+                                None => self.push_block(ChatBlock::Info("not connected.".into())),
+                            }
                         }
                     }
                     if btn(ui, "Restart") {
@@ -742,6 +796,7 @@ impl eframe::App for App {
                 ModalId::ProviderInfo => "Providers",
                 ModalId::Stats => "Session stats",
                 ModalId::Help => "Help",
+                ModalId::Context => "Context management",
                 ModalId::ResumeConfirm(..) => "Resume last session?",
                 ModalId::None => unreachable!(),
             };
@@ -772,6 +827,22 @@ impl eframe::App for App {
                             crate::ui::modals::resume_confirm(ui, path, *mtime, *count);
                         }
                         ModalId::None => unreachable!(),
+                        ModalId::Context => {} // handled below
+                    }
+                    // Context modal: action buttons return a ContextAction
+                    if let ModalId::Context = &open {
+                        if let Some(action) =
+                            crate::ui::modals::context_modal(ui, &self.context_body)
+                        {
+                            close_modal = true;
+                            if let Some(agent) = &mut self.agent {
+                                match action {
+                                    ContextAction::Compact => { let _ = agent.compact(); }
+                                    ContextAction::Clear => { let _ = agent.clear(); }
+                                    ContextAction::NewSession => { let _ = agent.new_session(); }
+                                }
+                            }
+                        }
                     }
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
