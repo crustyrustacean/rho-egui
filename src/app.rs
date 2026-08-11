@@ -9,7 +9,9 @@ use crate::chat::{ApprovalResolution, ChatBlock, ToolStatus, store as chat_store
 use crate::ui::chat_view::{BlockAction, render_block};
 use crate::ui::modals::{ContextAction, ModalId};
 use crate::ui::widgets;
-use crate::util::formatting::{format_secs, format_session_stats, format_usage_stats};
+use crate::util::formatting::{
+    format_secs, format_session_stats, format_usage_stats, StatsContent,
+};
 use crate::util::json::{jbool, jf64, jstr, ju64};
 
 pub struct App {
@@ -32,7 +34,7 @@ pub struct App {
     model_filter_text: String,
 
     // Stats cache
-    stats_body: String,
+    stats_body: StatsContent,
 
     // Modal control
     open_modal: ModalId,
@@ -44,7 +46,7 @@ pub struct App {
     context_modal_requested: bool,
 
     // Context modal body cache
-    context_body: String,
+    context_body: StatsContent,
 
     // Redirect input text per approval block index
     redirect_texts: HashMap<usize, String>,
@@ -78,11 +80,11 @@ impl Default for App {
             current_cwd: String::new(),
             models: Vec::new(),
             model_filter_text: String::new(),
-            stats_body: String::new(),
+            stats_body: StatsContent::text(String::new()),
             open_modal: ModalId::None,
             resume_latest_requested: false,
             context_modal_requested: false,
-            context_body: String::new(),
+            context_body: StatsContent::text(String::new()),
             redirect_texts: HashMap::new(),
             agent_spawned: false,
         }
@@ -362,7 +364,7 @@ impl App {
                 self.usage.ctx_used = ju64(Some(&result), "estimatedUsed");
                 self.usage.ctx_window = ju64(Some(&result), "contextWindow");
                 self.usage.util = ju64(Some(&result), "utilizationPercent").min(255) as u8;
-                self.stats_body = format_session_stats(&result);
+                self.stats_body = StatsContent::sections(format_session_stats(&result));
                 // Context modal: same response feeds this modal
                 // when the user opened it via the Context button.
                 if self.context_modal_requested {
@@ -407,7 +409,7 @@ impl App {
                 } else {
                     serde_json::to_string_pretty(&result).unwrap_or_default()
                 };
-                self.stats_body = body;
+                self.stats_body = StatsContent::text(body);
                 self.open_modal = ModalId::Stats;
             }
             RequestKind::Compact => {
@@ -597,10 +599,10 @@ impl eframe::App for App {
                         if self.busy {
                             // Render from cached usage data so the modal opens instantly
                             let u = &self.usage;
-                            self.context_body = format_usage_stats(
+                            self.context_body = StatsContent::sections(format_usage_stats(
                                 u.input, u.output, u.cached, u.cost,
                                 u.ctx_used, u.ctx_window, u.util,
-                            );
+                            ));
                             self.open_modal = ModalId::Context;
                         } else {
                             match &mut self.agent {

@@ -52,8 +52,39 @@ pub(crate) fn cap_tail(value: &str, max: usize) -> String {
     }
 }
 
-/// Render a getSessionStats result as aligned text for the Stats modal.
-pub(crate) fn format_session_stats(result: &Value) -> String {
+/// A single label/value pair in a stats table.
+#[derive(Clone, Debug)]
+pub(crate) struct StatRow {
+    pub label: String,
+    pub value: String,
+}
+
+/// A titled group of label/value rows rendered as a two-column table.
+#[derive(Clone, Debug)]
+pub(crate) struct StatSection {
+    pub title: String,
+    pub rows: Vec<StatRow>,
+}
+
+/// Body content for the Stats/Context modal — either structured table
+/// sections or free-form text (e.g. the extensions list).
+#[derive(Clone, Debug)]
+pub(crate) enum StatsContent {
+    Sections(Vec<StatSection>),
+    Text(String),
+}
+impl StatsContent {
+    pub(crate) fn sections(sections: Vec<StatSection>) -> Self {
+        StatsContent::Sections(sections)
+    }
+    pub(crate) fn text(text: String) -> Self {
+        StatsContent::Text(text)
+    }
+}
+
+/// Build a `getSessionStats` result into titled two-column sections
+/// for the Stats/Context modal.
+pub(crate) fn format_session_stats(result: &Value) -> Vec<StatSection> {
     let api = result.get("apiUsage");
     let role = result.get("roleTokens");
     let resolution = result.get("resolutionTokens");
@@ -64,63 +95,84 @@ pub(crate) fn format_session_stats(result: &Value) -> String {
             number.to_string()
         }
     };
-    format!(
-        "Context\n\
-         \x20 window          {}\n\
-         \x20 used            {} ({}%)\n\
-         \x20 remaining       {}\n\
-         \x20 completion rsv  {}\n\
-         \n\
-         Session\n\
-         \x20 messages        {}\n\
-         \x20 entries         {} ({} on path, {} compacted)\n\
-         \n\
-         Role tokens\n\
-         \x20 system          {}\n\
-         \x20 user            {}\n\
-         \x20 assistant       {}\n\
-         \x20 tool            {}\n\
-         \n\
-         Resolution\n\
-         \x20 full            {}\n\
-         \x20 outlined        {}\n\
-         \x20 summarized      {}\n\
-         \x20 pinned          {}\n\
-         \n\
-         API usage\n\
-         \x20 input           {}\n\
-         \x20 output          {}\n\
-         \x20 cached          {}\n\
-         \x20 total           {}\n\
-         \x20 requests        {}\n\
-         \x20 cost            ${:.4}",
-        compact(ju64(Some(result), "contextWindow")),
-        compact(ju64(Some(result), "estimatedUsed")),
-        ju64(Some(result), "utilizationPercent"),
-        compact(ju64(Some(result), "estimatedRemaining")),
-        compact(ju64(Some(result), "completionReserve")),
-        ju64(Some(result), "messageCount"),
-        ju64(Some(result), "entryCount"),
-        ju64(Some(result), "pathEntryCount"),
-        ju64(Some(result), "compactedEntryCount"),
-        compact(ju64(role, "system")),
-        compact(ju64(role, "user")),
-        compact(ju64(role, "assistant")),
-        compact(ju64(role, "tool")),
-        compact(ju64(resolution, "full")),
-        compact(ju64(resolution, "outlined")),
-        compact(ju64(resolution, "summarized")),
-        compact(ju64(resolution, "pinned")),
-        compact(ju64(api, "totalInputTokens")),
-        compact(ju64(api, "totalOutputTokens")),
-        compact(ju64(api, "totalCachedTokens")),
-        compact(ju64(api, "totalTokens")),
-        ju64(api, "requestCount"),
-        jf64(api, "totalCost"),
-    )
+
+    let used = ju64(Some(result), "estimatedUsed");
+    let util = ju64(Some(result), "utilizationPercent");
+
+    vec![
+        StatSection {
+            title: "Context".into(),
+            rows: vec![
+                StatRow {
+                    label: "window".into(),
+                    value: compact(ju64(Some(result), "contextWindow")),
+                },
+                StatRow {
+                    label: "used".into(),
+                    value: format!("{} ({}%)", compact(used), util),
+                },
+                StatRow {
+                    label: "remaining".into(),
+                    value: compact(ju64(Some(result), "estimatedRemaining")),
+                },
+                StatRow {
+                    label: "completion reserve".into(),
+                    value: compact(ju64(Some(result), "completionReserve")),
+                },
+            ],
+        },
+        StatSection {
+            title: "Session".into(),
+            rows: vec![
+                StatRow {
+                    label: "messages".into(),
+                    value: ju64(Some(result), "messageCount").to_string(),
+                },
+                StatRow {
+                    label: "entries".into(),
+                    value: format!(
+                        "{} ({} on path, {} compacted)",
+                        ju64(Some(result), "entryCount"),
+                        ju64(Some(result), "pathEntryCount"),
+                        ju64(Some(result), "compactedEntryCount"),
+                    ),
+                },
+            ],
+        },
+        StatSection {
+            title: "Role tokens".into(),
+            rows: vec![
+                StatRow { label: "system".into(), value: compact(ju64(role, "system")) },
+                StatRow { label: "user".into(), value: compact(ju64(role, "user")) },
+                StatRow { label: "assistant".into(), value: compact(ju64(role, "assistant")) },
+                StatRow { label: "tool".into(), value: compact(ju64(role, "tool")) },
+            ],
+        },
+        StatSection {
+            title: "Resolution".into(),
+            rows: vec![
+                StatRow { label: "full".into(), value: compact(ju64(resolution, "full")) },
+                StatRow { label: "outlined".into(), value: compact(ju64(resolution, "outlined")) },
+                StatRow { label: "summarized".into(), value: compact(ju64(resolution, "summarized")) },
+                StatRow { label: "pinned".into(), value: compact(ju64(resolution, "pinned")) },
+            ],
+        },
+        StatSection {
+            title: "API usage".into(),
+            rows: vec![
+                StatRow { label: "input".into(), value: compact(ju64(api, "totalInputTokens")) },
+                StatRow { label: "output".into(), value: compact(ju64(api, "totalOutputTokens")) },
+                StatRow { label: "cached".into(), value: compact(ju64(api, "totalCachedTokens")) },
+                StatRow { label: "total".into(), value: compact(ju64(api, "totalTokens")) },
+                StatRow { label: "requests".into(), value: ju64(api, "requestCount").to_string() },
+                StatRow { label: "cost".into(), value: format!("${:.4}", jf64(api, "totalCost")) },
+            ],
+        },
+    ]
 }
 
-/// Render cached UsageState as aligned text for the Stats/Context modal.
+/// Build cached `UsageState` into titled two-column sections for the
+/// Stats/Context modal.
 ///
 /// Used when a turn is running and a fresh getSessionStats round-trip would
 /// queue behind the agent loop. Covers the context + API usage sections that
@@ -134,7 +186,7 @@ pub(crate) fn format_usage_stats(
     ctx_used: u64,
     ctx_window: u64,
     util: u8,
-) -> String {
+) -> Vec<StatSection> {
     let k = |n: u64| {
         if n == 0 {
             "0".to_string()
@@ -143,28 +195,25 @@ pub(crate) fn format_usage_stats(
         }
     };
     let remaining = ctx_window.saturating_sub(ctx_used);
-    format!(
-        "Context\n\
-         \x20 window          {}\n\
-         \x20 used            {} ({})%\n\
-         \x20 remaining       {}\n\
-         \n\
-         API usage (cumulative)\n\
-         \x20 input           {}\n\
-         \x20 output          {}\n\
-         \x20 cached          {}\n\
-         \x20 cost            ${:.4}\n\
-         \n\
-         Full breakdown available when idle.",
-        k(ctx_window),
-        k(ctx_used),
-        util,
-        k(remaining),
-        k(input),
-        k(output),
-        k(cached),
-        cost,
-    )
+    vec![
+        StatSection {
+            title: "Context".into(),
+            rows: vec![
+                StatRow { label: "window".into(), value: k(ctx_window) },
+                StatRow { label: "used".into(), value: format!("{} ({}%)", k(ctx_used), util) },
+                StatRow { label: "remaining".into(), value: k(remaining) },
+            ],
+        },
+        StatSection {
+            title: "API usage (cumulative)".into(),
+            rows: vec![
+                StatRow { label: "input".into(), value: k(input) },
+                StatRow { label: "output".into(), value: k(output) },
+                StatRow { label: "cached".into(), value: k(cached) },
+                StatRow { label: "cost".into(), value: format!("${:.4}", cost) },
+            ],
+        },
+    ]
 }
 
 #[cfg(test)]

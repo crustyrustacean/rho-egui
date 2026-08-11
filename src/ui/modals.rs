@@ -1,7 +1,7 @@
 // src/ui/modals.rs
 
 use crate::ui::widgets::{get_models, get_providers, get_sessions};
-use crate::util::formatting::relative_time;
+use crate::util::formatting::{relative_time, StatsContent};
 use egui::{CornerRadius, Frame, Margin, Stroke, Ui};
 
 /// Open modal identifier.
@@ -111,15 +111,49 @@ pub(crate) fn provider_info(ui: &mut Ui) {
     });
 }
 
+/// Render the body of the stats/context modal as either a two-column table
+/// (one grid per section) or plain text.
+fn render_stats_content(ui: &mut Ui, content: &StatsContent) {
+    match content {
+        StatsContent::Sections(sections) => {
+            for section in sections {
+                ui.add_space(6.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(0xea, 0xea, 0xea),
+                    &section.title,
+                );
+                ui.add_space(2.0);
+                egui::Grid::new(format!("stats_grid_{}", section.title))
+                    .num_columns(2)
+                    .spacing(egui::vec2(12.0, 4.0))
+                    .min_col_width(120.0)
+                    .show(ui, |ui| {
+                        for row in &section.rows {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(0xca, 0xca, 0xca),
+                                &row.label,
+                            );
+                            ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), &row.value);
+                            ui.end_row();
+                        }
+                    });
+            }
+        }
+        StatsContent::Text(body) => {
+            ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), body);
+        }
+    }
+}
+
 /// Render the stats modal.
-pub(crate) fn stats_modal(ui: &mut Ui, body: &str) {
+pub(crate) fn stats_modal(ui: &mut Ui, content: &StatsContent) {
     modal_frame(ui, |ui| {
         ui.set_min_width(500.0);
         ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), "Session stats");
         egui::ScrollArea::vertical()
             .max_height(450.0)
             .show(ui, |ui| {
-                ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), body);
+                render_stats_content(ui, content);
             });
     });
 }
@@ -143,11 +177,14 @@ pub(crate) fn help_modal(ui: &mut Ui) {
                      Resume Last — quickly resume the most recent session\n  \
                      Model — pick a model from the scrollable list\n  \
                      Providers — view configured providers and their status\n  \
+                     Extensions — list installed extensions\n  \
                      Reload — reload extensions from disk\n  \
+                     Context — inspect context usage; Compact, Clear, or start a New Session\n  \
                      Restart — kill and re-spawn the rho subprocess\n  \
                      Abort — cancel the current agent turn\n  \
+                     Stats — view session stats (usage, tokens, cost)\n  \
                      Help — this dialog\n  \
-                     Quit — exit rho\n\n\
+                     Quit — exit rho\n\
                      Input: Enter sends, Shift+Enter inserts a newline.\n\n\
                      While the agent is working, your message is sent as a mid-turn\n\
                      steering prompt instead of starting a new turn.",
@@ -183,7 +220,7 @@ pub(crate) enum ContextAction {
 /// Render the context management modal.
 /// Returns `Some(action)` if an action button was clicked (modal should close).
 /// Returns `None` if no action was taken this frame.
-pub(crate) fn context_modal(ui: &mut Ui, body: &str) -> Option<ContextAction> {
+pub(crate) fn context_modal(ui: &mut Ui, content: &StatsContent) -> Option<ContextAction> {
     let mut action = None;
     modal_frame(ui, |ui| {
         ui.set_min_width(500.0);
@@ -191,7 +228,7 @@ pub(crate) fn context_modal(ui: &mut Ui, body: &str) -> Option<ContextAction> {
         egui::ScrollArea::vertical()
             .max_height(450.0)
             .show(ui, |ui| {
-                ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), body);
+                render_stats_content(ui, content);
             });
         ui.horizontal(|ui| {
             if ui.button("Compact").clicked() {
