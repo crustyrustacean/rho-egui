@@ -6,6 +6,8 @@ use egui::{CornerRadius, Frame, Margin, Stroke, Ui};
 
 /// Render a single ChatBlock into the current UI area.
 /// `redirect_texts` stores in-flight redirect-message text per block index.
+/// `cache` is the caller-owned markdown cache — it must persist across frames
+/// for egui_commonmark's layout reuse to do anything.
 /// Returns `Some(action)` if the user triggered an inline action.
 #[derive(Clone, Debug)]
 pub(crate) enum BlockAction {
@@ -20,6 +22,7 @@ pub(crate) fn render_block(
     index: usize,
     block: &ChatBlock,
     redirect_texts: &mut std::collections::HashMap<usize, String>,
+    cache: &mut egui_commonmark::CommonMarkCache,
 ) -> Option<BlockAction> {
     match block {
         ChatBlock::User(text) => render_frame(ui, "#303045", |ui| {
@@ -63,8 +66,7 @@ pub(crate) fn render_block(
             } else {
                 cap_head(text, 4000)
             };
-            let mut cache = egui_commonmark::CommonMarkCache::default();
-            CommonMarkViewer::new().show(ui, &mut cache, &display);
+            CommonMarkViewer::new().show(ui, cache, &display);
             let can_toggle = text.chars().count() > 4000;
             if can_toggle {
                 let label = if *expanded { "Collapse" } else { "Expand" };
@@ -140,17 +142,10 @@ pub(crate) fn render_block(
                             let text = redirect_texts.entry(index).or_default();
                             let btn_width = 80.0;
 
-                            // Consume Enter (without Shift) to submit,
-                            // Shift+Enter to insert newline.
-                            let submit = ui.ctx().input_mut(|i| {
-                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                            });
-                            if ui.ctx().input_mut(|i| {
-                                i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)
-                            }) {
-                                text.push('\n');
-                            }
-
+                            // Add the TextEdit BEFORE consuming keys, then gate
+                            // on its actual focus. Reading keys first would
+                            // steal Enter from the main input box whenever a
+                            // pending approval exists further up the transcript.
                             let resp = ui.add_sized(
                                 egui::vec2((ui.available_width() - btn_width).max(60.0), 0.0),
                                 egui::TextEdit::multiline(text)
@@ -158,10 +153,23 @@ pub(crate) fn render_block(
                                     .desired_width(f32::INFINITY)
                                     .min_size(egui::vec2(60.0, 40.0)),
                             );
-                            if submit && !text.is_empty() {
-                                let msg = std::mem::take(text);
-                                action = Some(BlockAction::Redirect(index, msg));
-                                resp.request_focus();
+                            let has_focus = ui.memory(|m| m.focused() == Some(resp.id));
+
+                            // Shift+Enter inserts a newline; Enter submits.
+                            if has_focus {
+                                if ui.ctx().input_mut(|i| {
+                                    i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)
+                                }) {
+                                    text.push('\n');
+                                }
+                                let submit = ui.ctx().input_mut(|i| {
+                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                                });
+                                if submit && !text.is_empty() {
+                                    let msg = std::mem::take(text);
+                                    action = Some(BlockAction::Redirect(index, msg));
+                                    resp.request_focus();
+                                }
                             }
                             if ui.button("Redirect").clicked() && !text.is_empty() {
                                 let msg = std::mem::take(text);

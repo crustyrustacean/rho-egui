@@ -82,12 +82,27 @@ impl StatsContent {
     }
 }
 
+/// Cache hit rate as a whole percentage of input tokens served from cache.
+///
+/// Returns `n/a` when no input tokens have been recorded, so a provider with
+/// no prompt caching reads as *absent* rather than as a broken 0%. Some
+/// providers over-report cached tokens (more cached than input), so the value
+/// is clamped at 100%.
+pub(crate) fn cache_hit_rate(input: u64, cached: u64) -> String {
+    if input == 0 {
+        return "n/a".to_string();
+    }
+    let pct = (cached as f64 / input as f64 * 100.0).min(100.0);
+    format!("{pct:.0}%")
+}
+
 /// Build a `getSessionStats` result into titled two-column sections
 /// for the Stats/Context modal.
 pub(crate) fn format_session_stats(result: &Value) -> Vec<StatSection> {
     let api = result.get("apiUsage");
     let role = result.get("roleTokens");
     let resolution = result.get("resolutionTokens");
+    let phase = result.get("phaseTokens");
     let compact = |number: u64| {
         if number >= 1000 {
             format!("{:.1}k", number as f64 / 1000.0)
@@ -163,9 +178,39 @@ pub(crate) fn format_session_stats(result: &Value) -> Vec<StatSection> {
                 StatRow { label: "input".into(), value: compact(ju64(api, "totalInputTokens")) },
                 StatRow { label: "output".into(), value: compact(ju64(api, "totalOutputTokens")) },
                 StatRow { label: "cached".into(), value: compact(ju64(api, "totalCachedTokens")) },
+                StatRow {
+                    label: "cache hit rate".into(),
+                    value: cache_hit_rate(
+                        ju64(api, "totalInputTokens"),
+                        ju64(api, "totalCachedTokens"),
+                    ),
+                },
                 StatRow { label: "total".into(), value: compact(ju64(api, "totalTokens")) },
                 StatRow { label: "requests".into(), value: ju64(api, "requestCount").to_string() },
                 StatRow { label: "cost".into(), value: format!("${:.4}", jf64(api, "totalCost")) },
+            ],
+        },
+        StatSection {
+            title: "Compaction".into(),
+            rows: vec![
+                StatRow {
+                    label: "compaction tokens".into(),
+                    value: compact(ju64(Some(result), "compactionTokens")),
+                },
+                StatRow {
+                    label: "compacted entries".into(),
+                    value: ju64(Some(result), "compactedEntryCount").to_string(),
+                },
+            ],
+        },
+        StatSection {
+            title: "Phase tokens".into(),
+            rows: vec![
+                StatRow { label: "exploration".into(), value: compact(ju64(phase, "exploration")) },
+                StatRow { label: "execution".into(), value: compact(ju64(phase, "execution")) },
+                StatRow { label: "verification".into(), value: compact(ju64(phase, "verification")) },
+                StatRow { label: "conclusion".into(), value: compact(ju64(phase, "conclusion")) },
+                StatRow { label: "unclassified".into(), value: compact(ju64(phase, "unclassified")) },
             ],
         },
     ]

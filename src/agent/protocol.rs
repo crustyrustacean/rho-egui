@@ -1,10 +1,11 @@
 // src/agent/protocol.rs
 
-use crate::util::json::{jbool, jf64, jstr, ju64};
+use crate::util::json::{jbool_any, jf64, jstr, ju64};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RequestKind {
     GetState,
+    GetMessages,
     GetSessionStats,
     ListModels,
     ListProviders,
@@ -13,9 +14,14 @@ pub(crate) enum RequestKind {
     ResumeSession,
     ReloadExtensions,
     ListExtensions,
+    ListTools,
     Compact,
     Clear,
     NewSession,
+    Fork,
+    ListBranches,
+    SwitchBranch,
+    NameBranch,
 }
 
 #[derive(Clone, Debug)]
@@ -104,7 +110,13 @@ pub(crate) fn parse_notification(v: &serde_json::Value) -> Option<RhoEvent> {
         },
         "tool/result" => RhoEvent::ToolResult {
             name: jstr(p, "name"),
-            is_error: jbool(p, "isError"),
+            // rho sends this key snake_case: `ToolResultParams` carries an
+            // explicit `#[serde(rename = "is_error")]` that overrides the
+            // struct-level `rename_all = "camelCase"`, so the wire form is
+            // `is_error`, NOT `isError`. Accept either so we survive a rho
+            // that ever drops the override, but never silently read a failed
+            // tool as a success.
+            is_error: jbool_any(p, &["is_error", "isError"]),
             output: jstr(p, "output"),
         },
         "tool/denied" => RhoEvent::ToolDenied {
@@ -207,7 +219,7 @@ mod tests {
     #[test]
     fn tool_result_success() {
         match parse(
-            r#"{"method":"tool/result","params":{"name":"r","isError":false,"output":"ok"}}"#,
+            r#"{"method":"tool/result","params":{"name":"r","is_error":false,"output":"ok"}}"#,
         ) {
             Some(RhoEvent::ToolResult {
                 name,
@@ -218,6 +230,42 @@ mod tests {
                 assert!(!is_error);
                 assert_eq!(output, "ok");
             }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    /// Regression: rho's `ToolResultParams::is_error` is renamed to the
+    /// snake_case `is_error` on the wire, so a failed tool used to parse as a
+    /// success and render green.
+    #[test]
+    fn tool_result_error_snake_case() {
+        match parse(
+            r#"{"method":"tool/result","params":{"name":"r","is_error":true,"output":"boom"}}"#,
+        ) {
+            Some(RhoEvent::ToolResult { is_error, .. }) => assert!(is_error),
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    /// Tolerated fallback if rho ever drops the serde override.
+    #[test]
+    fn tool_result_error_camel_case_fallback() {
+        match parse(
+            r#"{"method":"tool/result","params":{"name":"r","isError":true,"output":"boom"}}"#,
+        ) {
+            Some(RhoEvent::ToolResult { is_error, .. }) => assert!(is_error),
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    /// An explicit `false` must win over the presence of a sibling alias,
+    /// so `{"is_error":false,"isError":true}` reads as success (primary first).
+    #[test]
+    fn tool_result_error_prefers_primary_key() {
+        match parse(
+            r#"{"method":"tool/result","params":{"name":"r","is_error":false,"isError":true,"output":"ok"}}"#,
+        ) {
+            Some(RhoEvent::ToolResult { is_error, .. }) => assert!(!is_error),
             other => panic!("expected ToolResult, got {other:?}"),
         }
     }

@@ -222,6 +222,37 @@ impl RhoAgent {
             serde_json::json!({}),
         )
     }
+    pub fn list_tools(&mut self) -> Result<(), String> {
+        self.request(RequestKind::ListTools, "listTools", serde_json::json!({}))
+    }
+    pub fn get_messages(&mut self) -> Result<(), String> {
+        self.request(RequestKind::GetMessages, "getMessages", serde_json::json!({}))
+    }
+
+    // ── Branch management ───────────────────────────────────────────────────
+    // A branch is a cursor over the shared session log. `fork` creates a new
+    // cursor but does NOT activate it, so the transcript on screen still
+    // belongs to the branch the next `prompt` runs on.
+    pub fn fork(&mut self) -> Result<(), String> {
+        self.request(RequestKind::Fork, "fork", serde_json::json!({}))
+    }
+    pub fn list_branches(&mut self) -> Result<(), String> {
+        self.request(RequestKind::ListBranches, "listBranches", serde_json::json!({}))
+    }
+    pub fn switch_branch(&mut self, cursor_id: &str) -> Result<(), String> {
+        self.request(
+            RequestKind::SwitchBranch,
+            "switchBranch",
+            serde_json::json!({ "cursorId": cursor_id }),
+        )
+    }
+    pub fn name_branch(&mut self, cursor_id: &str, name: &str) -> Result<(), String> {
+        self.request(
+            RequestKind::NameBranch,
+            "nameBranch",
+            serde_json::json!({ "cursorId": cursor_id, "name": name }),
+        )
+    }
     pub fn approval_response(
         &mut self,
         approved: bool,

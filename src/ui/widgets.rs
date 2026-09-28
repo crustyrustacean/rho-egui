@@ -30,6 +30,8 @@ pub(crate) struct SessionEntry {
     pub path: String,
     pub mtime_secs: u64,
     pub entry_count: u64,
+    /// On-disk size in whole KiB, as reported by rho's `listSessions`.
+    pub size_kb: u64,
 }
 
 static SESSIONS: RwLock<Vec<SessionEntry>> = RwLock::new(Vec::new());
@@ -60,4 +62,57 @@ pub(crate) fn set_providers(providers: Vec<ProviderEntry>) {
 
 pub(crate) fn get_providers() -> Vec<ProviderEntry> {
     PROVIDERS.read().unwrap().clone()
+}
+
+// ── Branch list ────────────────────────────────────────────────────────────
+
+/// A branch is a cursor over the shared session log. `active` marks the cursor
+/// a subsequent `prompt` runs on.
+#[derive(Clone)]
+pub(crate) struct BranchEntry {
+    pub cursor_id: String,
+    pub label: String,
+    pub active: bool,
+    /// False when `label` is the short-id fallback rather than a user-assigned
+    /// name. The fallback is fine for a picker row but is noise in a title bar.
+    pub is_named: bool,
+}
+
+static BRANCHES: RwLock<Vec<BranchEntry>> = RwLock::new(Vec::new());
+
+pub(crate) fn set_branches(branches: Vec<BranchEntry>) {
+    *BRANCHES.write().unwrap() = branches;
+}
+
+pub(crate) fn get_branches() -> Vec<BranchEntry> {
+    BRANCHES.read().unwrap().clone()
+}
+
+pub(crate) fn get_branch(index: usize) -> Option<BranchEntry> {
+    BRANCHES.read().unwrap().get(index).cloned()
+}
+
+pub(crate) fn active_branch() -> Option<BranchEntry> {
+    BRANCHES.read().unwrap().iter().find(|b| b.active).cloned()
+}
+
+// ── Tool list ──────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub(crate) struct ToolEntry {
+    pub name: String,
+    pub description: String,
+    pub risk: String,
+    /// Pretty-printed JSON schema for the tool's parameters.
+    pub parameters: String,
+}
+
+static TOOLS: RwLock<Vec<ToolEntry>> = RwLock::new(Vec::new());
+
+pub(crate) fn set_tools(tools: Vec<ToolEntry>) {
+    *TOOLS.write().unwrap() = tools;
+}
+
+pub(crate) fn get_tools() -> Vec<ToolEntry> {
+    TOOLS.read().unwrap().clone()
 }

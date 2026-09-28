@@ -1,6 +1,6 @@
 // src/ui/modals.rs
 
-use crate::ui::widgets::{get_models, get_providers, get_sessions};
+use crate::ui::widgets::{get_branches, get_models, get_providers, get_sessions, get_tools};
 use crate::util::formatting::{relative_time, StatsContent};
 use egui::{CornerRadius, Frame, Margin, Stroke, Ui};
 
@@ -14,6 +14,8 @@ pub(crate) enum ModalId {
     Stats,
     Help,
     Context,
+    Tools,
+    Branches,
     ResumeConfirm(String, u64, u64),
 }
 
@@ -61,20 +63,21 @@ pub(crate) fn model_picker(ui: &mut Ui, filter: &mut String, picked: &mut Option
 pub(crate) fn session_picker(ui: &mut Ui, picked: &mut Option<String>) {
     let sessions = get_sessions();
     modal_frame(ui, |ui| {
-        ui.set_min_width(520.0);
+        ui.set_min_width(600.0);
         ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), "Resume session");
         ui.colored_label(
             egui::Color32::from_rgb(0x7a, 0x7a, 0x7a),
-            "Modified   Entries     Session",
+            "Modified     Entries      Size   Session",
         );
         egui::ScrollArea::vertical()
             .max_height(340.0)
             .show(ui, |ui| {
                 for entry in &sessions {
                     let row = format!(
-                        "{:<11}{:<12}{}",
+                        "{:<13}{:<14}{:<8}{}",
                         relative_time(entry.mtime_secs),
                         format!("{} entries", entry.entry_count),
+                        format_size_kb(entry.size_kb),
                         entry.path
                     );
                     if ui.selectable_label(false, &row).clicked() {
@@ -83,6 +86,15 @@ pub(crate) fn session_picker(ui: &mut Ui, picked: &mut Option<String>) {
                 }
             });
     });
+}
+
+/// Render a session file size. rho reports whole KiB (`sizeKb`).
+fn format_size_kb(size_kb: u64) -> String {
+    if size_kb >= 1024 {
+        format!("{:.1}M", size_kb as f64 / 1024.0)
+    } else {
+        format!("{size_kb}K")
+    }
 }
 
 /// Render the provider info modal.
@@ -178,6 +190,8 @@ pub(crate) fn help_modal(ui: &mut Ui) {
                      Model — pick a model from the scrollable list\n  \
                      Providers — view configured providers and their status\n  \
                      Extensions — list installed extensions\n  \
+                     Tools — inspect registered tool schemas\n  \
+                     Branches — fork, switch, and label session branches\n  \
                      Reload — reload extensions from disk\n  \
                      Context — inspect context usage; Compact, Clear, or start a New Session\n  \
                      Restart — kill and re-spawn the rho subprocess\n  \
@@ -186,6 +200,8 @@ pub(crate) fn help_modal(ui: &mut Ui) {
                      Help — this dialog\n  \
                      Quit — exit rho\n\
                      Input: Enter sends, Shift+Enter inserts a newline.\n\n\
+                     Text size: Ctrl+= and Ctrl+- adjust it for this session;\n\
+                     set RHO_TEXT_ZOOM to change the default.\n\n\
                      While the agent is working, your message is sent as a mid-turn\n\
                      steering prompt instead of starting a new turn.",
                 );
@@ -243,6 +259,143 @@ pub(crate) fn context_modal(ui: &mut Ui, content: &StatsContent) -> Option<Conte
         });
     });
     action
+}
+
+/// Action returned from the branch management modal.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BranchAction {
+    /// Make the branch at this index active.
+    Switch(usize),
+    /// Fork a new cursor from the current one (does not activate it).
+    Fork,
+    /// Label the branch at this index; `name` is trimmed, empty clears it.
+    Name(usize, String),
+}
+
+/// Render the branch manager modal.
+///
+/// A branch is a cursor over the shared session log, not a copy of it.
+/// Switching branches changes what the next `prompt` sees.
+pub(crate) fn branch_modal(
+    ui: &mut Ui,
+    name_input: &mut String,
+    selected: &mut Option<usize>,
+    action: &mut Option<BranchAction>,
+) {
+    let branches = get_branches();
+    modal_frame(ui, |ui| {
+        ui.set_min_width(520.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(0xea, 0xea, 0xea),
+            "Branches",
+        );
+        ui.colored_label(
+            egui::Color32::from_rgb(0x7a, 0x7a, 0x7a),
+            format!(
+                "{} branch{}. Picking one makes it active; prompts then run on it.",
+                branches.len(),
+                if branches.len() == 1 { "" } else { "es" }
+            ),
+        );
+        egui::ScrollArea::vertical()
+            .max_height(240.0)
+            .show(ui, |ui| {
+                if branches.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(0x7a, 0x7a, 0x7a),
+                        "No branches yet.",
+                    );
+                }
+                for (i, entry) in branches.iter().enumerate() {
+                    let label = if entry.active {
+                        format!("✓ {}", entry.label)
+                    } else {
+                        entry.label.clone()
+                    };
+                    let selected_now = *selected == Some(i);
+                    if ui
+                        .selectable_label(selected_now, &label)
+                        .on_hover_text(&entry.cursor_id)
+                        .clicked()
+                    {
+                        *selected = Some(i);
+                        // Switching is a no-op on the already-active branch;
+                        // rho would succeed idempotently, but skip the round-trip.
+                        if !entry.active {
+                            *action = Some(BranchAction::Switch(i));
+                        }
+                    }
+                }
+            });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(name_input)
+                    .hint_text("branch name (empty clears)")
+                    .desired_width(260.0),
+            );
+            if ui.button("Rename").clicked() {
+                if let Some(i) = *selected {
+                    *action = Some(BranchAction::Name(i, name_input.trim().to_string()));
+                    name_input.clear();
+                }
+            }
+            if ui.button("Fork").clicked() {
+                *action = Some(BranchAction::Fork);
+            }
+        });
+    });
+}
+
+/// Render the tool inspector modal.
+pub(crate) fn tools_modal(ui: &mut Ui) {
+    let tools = get_tools();
+    modal_frame(ui, |ui| {
+        ui.set_min_width(620.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(0xea, 0xea, 0xea),
+            format!("Tools ({})", tools.len()),
+        );
+        egui::ScrollArea::vertical()
+            .max_height(450.0)
+            .show(ui, |ui| {
+                if tools.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(0x7a, 0x7a, 0x7a),
+                        "No tools registered.",
+                    );
+                }
+                for entry in &tools {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(0xea, 0xea, 0xea),
+                            egui::RichText::new(&entry.name).strong(),
+                        );
+                        if !entry.risk.is_empty() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(0x8a, 0x7a, 0x4a),
+                                format!("risk: {}", entry.risk),
+                            );
+                        }
+                    });
+                    if !entry.description.is_empty() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(0x9a, 0x9a, 0x9a),
+                            &entry.description,
+                        );
+                    }
+                    if !entry.parameters.is_empty() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(0x6a, 0x6a, 0x6a),
+                            egui::RichText::new(&entry.parameters).monospace(),
+                        );
+                    }
+                    ui.separator();
+                }
+            });
+    });
 }
 
 // ── Shared modal frame

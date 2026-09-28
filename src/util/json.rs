@@ -31,6 +31,29 @@ pub(crate) fn jbool(value: Option<&Value>, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Read a boolean that may be spelled under any of several keys, in order.
+///
+/// Needed where rho's wire schema is inconsistent — `ToolResultParams::is_error`
+/// carries an explicit `#[serde(rename = "is_error")]` that overrides the
+/// struct's `rename_all = "camelCase"`, so that one field is snake_case on the
+/// wire while every sibling is camelCase.
+pub(crate) fn jbool_any(value: Option<&Value>, keys: &[&str]) -> bool {
+    keys.iter()
+        .find_map(|key| value.and_then(|v| v.get(*key)).and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Read an optional string, distinguishing "absent/null" from "present but empty".
+///
+/// `jstr` collapses both to `""`, which makes a genuinely empty label
+/// indistinguishable from a missing one.
+pub(crate) fn jstr_opt(value: Option<&Value>, key: &str) -> Option<String> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(|value| value.as_str())
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
