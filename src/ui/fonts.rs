@@ -52,6 +52,7 @@ pub(crate) fn install(ctx: &egui::Context) {
 /// not Windows-only, and a hardcoded `C:\Windows\Fonts` path means a Linux or
 /// macOS machine silently falls back to Ubuntu-Light for everything — losing
 /// the monospace/proportional distinction that this module exists to create.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const PROPORTIONAL_CANDIDATES_WINDOWS: &[(&str, &str)] = &[
     ("Segoe UI", r"C:\Windows\Fonts\segoeui.ttf"),
     ("Arial", r"C:\Windows\Fonts\arial.ttf"),
@@ -77,6 +78,7 @@ const PROPORTIONAL_CANDIDATES_UNIX: &[(&str, &str)] = &[
 /// Monospace faces, best first. Cascadia ships with Windows Terminal and is far
 /// easier to read at length than the egui default; Consolas is the traditional
 /// fallback.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const MONOSPACE_CANDIDATES_WINDOWS: &[(&str, &str)] = &[
     ("Cascadia Code", r"C:\Windows\Fonts\CascadiaCode.ttf"),
     ("Consolas", r"C:\Windows\Fonts\consola.ttf"),
