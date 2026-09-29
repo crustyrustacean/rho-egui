@@ -1,0 +1,35 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+#
+# Typical release flow:
+#   cargo fmt --all -- --check
+#   cargo clippy --all-targets -- -D warnings
+#   cargo test
+#   cargo release <version> --execute     # bump, commit, tag
+#   git push origin trunk --tags          # push when ready
+#
+# Pushing the tag triggers .github/workflows/release.yml, which builds the
+# binaries and attaches them to the GitHub release.
+
+# Do not push automatically — review before pushing.
+push = false
+
+# This is a desktop application, not a library on crates.io. There is nothing
+# to `cargo publish`, and publishing the crate would be wrong. Cargo-release is
+# used only to bump the version, commit, and tag.
+publish = false
+
+# Release commit message follows the conventional-commits chore(release) pattern
+# so git-cliff skips it when generating the next CHANGELOG entry.
+pre-release-commit-message = "chore(release): prepare {{version}}"
+
+# Tag format.
+tag-name = "v{{version}}"
+tag-message = "Release {{version}}"
+
+# Only release from trunk.
+allow-branch = ["trunk"]
+
+# No crates.io metadata to maintain, and no dependency publishing.
+owners = ["crustyrustacean"]
+repository = "https://github.com/crustyrustacean/rho-egui"

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+    branches: [trunk]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Match the sibling repo's policy: nothing lands with a warning.
+  RUSTFLAGS: -D warnings
+
+# Cancel in-progress runs on the same ref when a new commit lands. Without
+# this, rapid pushes to trunk queue redundant full runs that each take a few
+# minutes and report stale red/green out of order.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── fmt: cheapest check, fastest feedback. Isolated so a formatting failure
+  # reads as "the fmt job failed" rather than being buried in a build log.
+  fmt:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  # ── clippy: second-cheapest, split out for the same reason as fmt.
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ── build + test: the expensive path. One job, because test implies build
+  # anyway and splitting them doubles compile time for no signal gain.
+  build-test:
+    name: build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --all-targets
+      - name: Test
+        run: cargo test

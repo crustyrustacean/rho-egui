@@ -35,7 +35,11 @@ pub(crate) fn finalize_streaming_response() {
         let owned = std::mem::take(text);
         *blocks.last_mut().unwrap() = ChatBlock::Response {
             text: owned,
-            expanded: false,
+            // Expanded by default: a finalized response is the thing the user
+            // is waiting to read, so it should arrive formatted. The "Expand"
+            // button appears only past RESPONSE_CAP, where the text is long
+            // enough that collapsing is a real saving.
+            expanded: true,
         };
     }
 }
@@ -69,7 +73,7 @@ pub(crate) fn push_final_response_if_missing(reply: String) {
     if !matches!(blocks.last(), Some(ChatBlock::Response { .. })) {
         blocks.push(ChatBlock::Response {
             text: reply,
-            expanded: false,
+            expanded: true,
         });
     }
 }
@@ -135,13 +139,10 @@ pub(crate) fn resolve_approval(index: usize, resolution: ApprovalResolution) {
 
 pub(crate) fn toggle_expand(index: usize) {
     let mut blocks = CHAT_BLOCKS.write().unwrap();
-    if let Some(block) = blocks.get_mut(index) {
-        match block {
-            ChatBlock::Response { expanded, .. } | ChatBlock::ToolCall { expanded, .. } => {
-                *expanded = !*expanded
-            }
-            _ => {}
-        }
+    if let Some(block) = blocks.get_mut(index)
+        && let ChatBlock::Response { expanded, .. } | ChatBlock::ToolCall { expanded, .. } = block
+    {
+        *expanded = !*expanded;
     }
 }
 
@@ -175,9 +176,7 @@ mod tests {
         snapshot()
             .into_iter()
             .filter_map(|b| match b {
-                ChatBlock::ToolCall { name, status, .. } => {
-                    Some((name, format!("{status:?}")))
-                }
+                ChatBlock::ToolCall { name, status, .. } => Some((name, format!("{status:?}"))),
                 _ => None,
             })
             .collect()

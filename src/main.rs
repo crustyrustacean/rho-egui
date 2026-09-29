@@ -19,6 +19,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "rho",
         options,
-        Box::new(|_cc| Ok(Box::new(app::App::default()))),
+        Box::new(|cc| {
+            // Fonts must be registered before the first frame; egui resolves
+            // glyphs lazily but the family list is read at layout time.
+            ui::fonts::install(&cc.egui_ctx);
+            Ok(Box::new(app::App::new(cc.egui_ctx.clone())))
+        }),
     )
 }

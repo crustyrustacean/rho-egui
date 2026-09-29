@@ -226,7 +226,11 @@ impl RhoAgent {
         self.request(RequestKind::ListTools, "listTools", serde_json::json!({}))
     }
     pub fn get_messages(&mut self) -> Result<(), String> {
-        self.request(RequestKind::GetMessages, "getMessages", serde_json::json!({}))
+        self.request(
+            RequestKind::GetMessages,
+            "getMessages",
+            serde_json::json!({}),
+        )
     }
 
     // ── Branch management ───────────────────────────────────────────────────
@@ -237,7 +241,11 @@ impl RhoAgent {
         self.request(RequestKind::Fork, "fork", serde_json::json!({}))
     }
     pub fn list_branches(&mut self) -> Result<(), String> {
-        self.request(RequestKind::ListBranches, "listBranches", serde_json::json!({}))
+        self.request(
+            RequestKind::ListBranches,
+            "listBranches",
+            serde_json::json!({}),
+        )
     }
     pub fn switch_branch(&mut self, cursor_id: &str) -> Result<(), String> {
         self.request(
@@ -265,24 +273,12 @@ impl RhoAgent {
         self.fire("approvalResponse", params)
     }
     pub fn compact(&mut self) -> Result<(), String> {
-        self.request(
-            RequestKind::Compact,
-            "compact",
-            serde_json::json!({}),
-        )
+        self.request(RequestKind::Compact, "compact", serde_json::json!({}))
     }
     pub fn clear(&mut self) -> Result<(), String> {
-        self.request(
-            RequestKind::Clear,
-            "clear",
-            serde_json::json!({}),
-        )
+        self.request(RequestKind::Clear, "clear", serde_json::json!({}))
     }
     pub fn new_session(&mut self) -> Result<(), String> {
-        self.request(
-            RequestKind::NewSession,
-            "newSession",
-            serde_json::json!({}),
-        )
+        self.request(RequestKind::NewSession, "newSession", serde_json::json!({}))
     }
 }

@@ -1,7 +1,7 @@
 // src/ui/modals.rs
 
 use crate::ui::widgets::{get_branches, get_models, get_providers, get_sessions, get_tools};
-use crate::util::formatting::{relative_time, StatsContent};
+use crate::util::formatting::{StatsContent, relative_time};
 use egui::{CornerRadius, Frame, Margin, Stroke, Ui};
 
 /// Open modal identifier.
@@ -15,6 +15,7 @@ pub(crate) enum ModalId {
     Help,
     Context,
     Tools,
+    Extensions,
     Branches,
     ResumeConfirm(String, u64, u64),
 }
@@ -130,10 +131,7 @@ fn render_stats_content(ui: &mut Ui, content: &StatsContent) {
         StatsContent::Sections(sections) => {
             for section in sections {
                 ui.add_space(6.0);
-                ui.colored_label(
-                    egui::Color32::from_rgb(0xea, 0xea, 0xea),
-                    &section.title,
-                );
+                ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), &section.title);
                 ui.add_space(2.0);
                 egui::Grid::new(format!("stats_grid_{}", section.title))
                     .num_columns(2)
@@ -141,10 +139,7 @@ fn render_stats_content(ui: &mut Ui, content: &StatsContent) {
                     .min_col_width(120.0)
                     .show(ui, |ui| {
                         for row in &section.rows {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(0xca, 0xca, 0xca),
-                                &row.label,
-                            );
+                            ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), &row.label);
                             ui.colored_label(egui::Color32::from_rgb(0xca, 0xca, 0xca), &row.value);
                             ui.end_row();
                         }
@@ -162,6 +157,26 @@ pub(crate) fn stats_modal(ui: &mut Ui, content: &StatsContent) {
     modal_frame(ui, |ui| {
         ui.set_min_width(500.0);
         ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), "Session stats");
+        egui::ScrollArea::vertical()
+            .max_height(450.0)
+            .show(ui, |ui| {
+                render_stats_content(ui, content);
+            });
+    });
+}
+
+/// Render the loaded-extensions modal.
+///
+/// Separate from [`stats_modal`] because it is a different list entirely:
+/// the extension inventory, not token usage. Reusing the stats modal showed
+/// the extension list under a "Session stats" heading.
+pub(crate) fn extensions_modal(ui: &mut Ui, content: &StatsContent) {
+    modal_frame(ui, |ui| {
+        ui.set_min_width(420.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(0xea, 0xea, 0xea),
+            "Loaded extensions",
+        );
         egui::ScrollArea::vertical()
             .max_height(450.0)
             .show(ui, |ui| {
@@ -240,7 +255,10 @@ pub(crate) fn context_modal(ui: &mut Ui, content: &StatsContent) -> Option<Conte
     let mut action = None;
     modal_frame(ui, |ui| {
         ui.set_min_width(500.0);
-        ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), "Context management");
+        ui.colored_label(
+            egui::Color32::from_rgb(0xea, 0xea, 0xea),
+            "Context management",
+        );
         egui::ScrollArea::vertical()
             .max_height(450.0)
             .show(ui, |ui| {
@@ -285,10 +303,7 @@ pub(crate) fn branch_modal(
     let branches = get_branches();
     modal_frame(ui, |ui| {
         ui.set_min_width(520.0);
-        ui.colored_label(
-            egui::Color32::from_rgb(0xea, 0xea, 0xea),
-            "Branches",
-        );
+        ui.colored_label(egui::Color32::from_rgb(0xea, 0xea, 0xea), "Branches");
         ui.colored_label(
             egui::Color32::from_rgb(0x7a, 0x7a, 0x7a),
             format!(
@@ -335,11 +350,11 @@ pub(crate) fn branch_modal(
                     .hint_text("branch name (empty clears)")
                     .desired_width(260.0),
             );
-            if ui.button("Rename").clicked() {
-                if let Some(i) = *selected {
-                    *action = Some(BranchAction::Name(i, name_input.trim().to_string()));
-                    name_input.clear();
-                }
+            if ui.button("Rename").clicked()
+                && let Some(i) = *selected
+            {
+                *action = Some(BranchAction::Name(i, name_input.trim().to_string()));
+                name_input.clear();
             }
             if ui.button("Fork").clicked() {
                 *action = Some(BranchAction::Fork);
@@ -409,4 +424,50 @@ fn modal_frame(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
         ..Default::default()
     };
     frame.show(ui, content);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every modal must have its own `ModalId` and its own window title.
+    ///
+    /// The extension list used to be rendered by `stats_modal` under a
+    /// "Session stats" heading, so clicking Extensions → "List loaded…" opened
+    /// a window titled "Session stats". This guards the two things that caused
+    /// it: reusing another modal's id, and reusing another modal's body field.
+    #[test]
+    fn extensions_modal_has_its_own_id_and_title() {
+        // A distinct variant, not an alias for Stats.
+        assert_ne!(ModalId::Extensions, ModalId::Stats);
+    }
+
+    /// Titles must be unique across modals, since they are what the user sees
+    /// in the window header.
+    #[test]
+    fn modal_titles_are_unique() {
+        let titles = [
+            (ModalId::ModelPicker, "Select model"),
+            (ModalId::SessionPicker, "Resume session"),
+            (ModalId::ProviderInfo, "Providers"),
+            (ModalId::Stats, "Session stats"),
+            (ModalId::Extensions, "Loaded extensions"),
+            (ModalId::Help, "Help"),
+            (ModalId::Context, "Context management"),
+            (ModalId::Tools, "Registered tools"),
+            (ModalId::Branches, "Branches"),
+            (
+                ModalId::ResumeConfirm("p".into(), 0, 0),
+                "Resume last session?",
+            ),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (id, title) in &titles {
+            assert!(
+                seen.insert(*title),
+                "duplicate modal title {title:?} — two windows would look identical"
+            );
+            assert!(!title.is_empty(), "modal {id:?} has an empty title");
+        }
+    }
 }

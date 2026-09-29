@@ -6,3 +6,11 @@ logs
 
 # Build artifacts
 /target
+
+# Local, personal knowledge-base extensions (canonical copies live outside
+# the repo; they contain a private tailnet hostname and are copied between
+# projects by hand, not published here).
+extensions/
+
+# Working plans from agent sessions
+.plans/

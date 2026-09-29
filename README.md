@@ -1,6 +1,12 @@
 # rho-egui
 
-A desktop GUI for the [rho](https://github.com/jeffs/rho) coding assistant, built with [egui](https://github.com/emilk/egui) (immediate mode GUI).
+**The official UI for [rho](https://github.com/crustyrustacean/rho-coding-agent)** —
+a desktop GUI built with [egui](https://github.com/emilk/egui) (immediate mode
+GUI).
+
+It spawns `rho` as a subprocess and talks to it over JSON-RPC 2.0 on
+stdin/stdout, rendering the agent stream as a chat. `rho` itself is headless by
+design; this is the front end.
 
 ## Features
 
@@ -20,8 +26,21 @@ A desktop GUI for the [rho](https://github.com/jeffs/rho) coding assistant, buil
 
 ### Prerequisites
 
-- [rho](https://github.com/jeffs/rho) installed and on your PATH (or set `RHO_PATH`)
+- [rho](https://github.com/crustyrustacean/rho-coding-agent) installed and on your PATH (or set `RHO_PATH`)
 - Rust toolchain (edition 2024)
+
+### Install
+
+Download a prebuilt binary from the
+[releases page](https://github.com/crustyrustacean/rho-egui/releases) — Windows
+and Linux x86-64 are built for every tag.
+
+Or build from source:
+
+```bash
+cargo build --release
+./target/release/rho-egui        # rho-egui.exe on Windows
+```
 
 ### Run
 
@@ -93,9 +112,49 @@ property; if you change the function, keep them passing.
   session's history is not replayed — only messages streamed in this process
   appear. Switching branches clears the transcript for the same reason.
 - Tool calls are matched to their results by name only (rho's protocol sends
-  no call id), so two concurrent calls to the same tool can share a result.
-- Not available in the egui build: undo/redo, syntax-highlighted tool output,
-  and text selection in modals.
+  no call id), so two concurrent calls to the same tool can share a result. A
+  pending call is preferred when resolving, which reduces but does not
+  eliminate the ambiguity.
+- Not available: undo/redo of prior turns.
+- Tool output is plain monospace text, not syntax-highlighted. Code blocks
+  *inside model responses* are highlighted; raw tool output is not.
+- Responses are capped at 12,000 characters when collapsed, with an **Expand**
+  button beyond that. Tool output caps at 10,000.
+
+## Development
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+CI runs all three on every push to `trunk`.
+
+## Releasing
+
+```bash
+# pre-flight
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+
+# bump, commit, tag
+cargo install cargo-release
+cargo release <version> --execute
+
+# push — the tag triggers the binary build
+git push origin trunk --tags
+```
+
+Pushing the tag runs `.github/workflows/release.yml`, which builds Windows and
+Linux binaries and attaches them to the GitHub release with generated release
+notes. `CHANGELOG.md` is generated from conventional commits with
+[git-cliff](https://git-cliff.org):
+
+```bash
+git cliff --tag v1.0.0 --output CHANGELOG.md
+```
 
 ## License
 

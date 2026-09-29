@@ -52,6 +52,84 @@ pub(crate) fn cap_tail(value: &str, max: usize) -> String {
     }
 }
 
+/// Truncate to `max` characters, backing up to a line boundary so the partial
+/// text stays well-formed markdown.
+///
+/// [`cap_head`] cuts at an exact character count, which lands inside a list
+/// item, a code fence or a table row. The result is a wall of literal `**` and
+/// unclosed fences that reads as broken output rather than a preview.
+///
+/// Two rules, applied in order:
+///   1. never end on an odd number of ``` fences — that would leave a code
+///      block unterminated, so back up past the opening fence;
+///   2. otherwise end at the last line break, provided it is not so far back
+///      that little text would remain.
+pub(crate) fn cap_head_lines(value: &str, max: usize) -> String {
+    let count = value.chars().count();
+    if count <= max {
+        return value.to_string();
+    }
+    let head: String = value.chars().take(max).collect();
+
+    let mut cut = match head.rfind('\n') {
+        Some(idx) if idx >= MIN_KEPT_CHARS.min(max) => idx,
+        // No usable line break: fall back to the last whitespace so a long
+        // line does not end mid-word.
+        Some(_) => last_whitespace(&head).unwrap_or(max),
+        None => last_whitespace(&head).unwrap_or(max),
+    };
+
+    // A dangling ``` fence renders as an open code block to the end of the
+    // message. Back up to before the opening fence when there is one.
+    if count_fences(&head[..cut]) % 2 == 1
+        && let Some(idx) = head[..cut].rfind("```")
+    {
+        cut = head[..idx].rfind('\n').unwrap_or(0);
+    }
+
+    // Never end on a bare list marker: a trailing "-" renders as an empty
+    // bullet with nothing in it, which looks like a rendering fault.
+    if let Some(idx) = head[..cut].rfind('\n') {
+        let line = &head[idx + 1..cut];
+        if line.len() <= 2 && line.chars().all(|c| c == '-' || c == '*' || c == '+') {
+            cut = idx;
+        }
+    }
+
+    let kept: String = head.chars().take(cut).collect();
+    let kept_count = kept.chars().count();
+    let omitted = format_thousands(count.saturating_sub(kept_count));
+    format!("{kept}\n\n[...{omitted} more chars...]")
+}
+
+/// Never keep fewer than this many characters when backing up to a boundary.
+const MIN_KEPT_CHARS: usize = 80;
+
+fn last_whitespace(s: &str) -> Option<usize> {
+    s.char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map(|(i, _)| i)
+}
+
+/// Count ``` fence markers in `s`.
+fn count_fences(s: &str) -> usize {
+    s.matches("```").count()
+}
+
+/// Group digits: `1234567` -> `1,234,567`.
+fn format_thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// A single label/value pair in a stats table.
 #[derive(Clone, Debug)]
 pub(crate) struct StatRow {
@@ -157,27 +235,60 @@ pub(crate) fn format_session_stats(result: &Value) -> Vec<StatSection> {
         StatSection {
             title: "Role tokens".into(),
             rows: vec![
-                StatRow { label: "system".into(), value: compact(ju64(role, "system")) },
-                StatRow { label: "user".into(), value: compact(ju64(role, "user")) },
-                StatRow { label: "assistant".into(), value: compact(ju64(role, "assistant")) },
-                StatRow { label: "tool".into(), value: compact(ju64(role, "tool")) },
+                StatRow {
+                    label: "system".into(),
+                    value: compact(ju64(role, "system")),
+                },
+                StatRow {
+                    label: "user".into(),
+                    value: compact(ju64(role, "user")),
+                },
+                StatRow {
+                    label: "assistant".into(),
+                    value: compact(ju64(role, "assistant")),
+                },
+                StatRow {
+                    label: "tool".into(),
+                    value: compact(ju64(role, "tool")),
+                },
             ],
         },
         StatSection {
             title: "Resolution".into(),
             rows: vec![
-                StatRow { label: "full".into(), value: compact(ju64(resolution, "full")) },
-                StatRow { label: "outlined".into(), value: compact(ju64(resolution, "outlined")) },
-                StatRow { label: "summarized".into(), value: compact(ju64(resolution, "summarized")) },
-                StatRow { label: "pinned".into(), value: compact(ju64(resolution, "pinned")) },
+                StatRow {
+                    label: "full".into(),
+                    value: compact(ju64(resolution, "full")),
+                },
+                StatRow {
+                    label: "outlined".into(),
+                    value: compact(ju64(resolution, "outlined")),
+                },
+                StatRow {
+                    label: "summarized".into(),
+                    value: compact(ju64(resolution, "summarized")),
+                },
+                StatRow {
+                    label: "pinned".into(),
+                    value: compact(ju64(resolution, "pinned")),
+                },
             ],
         },
         StatSection {
             title: "API usage".into(),
             rows: vec![
-                StatRow { label: "input".into(), value: compact(ju64(api, "totalInputTokens")) },
-                StatRow { label: "output".into(), value: compact(ju64(api, "totalOutputTokens")) },
-                StatRow { label: "cached".into(), value: compact(ju64(api, "totalCachedTokens")) },
+                StatRow {
+                    label: "input".into(),
+                    value: compact(ju64(api, "totalInputTokens")),
+                },
+                StatRow {
+                    label: "output".into(),
+                    value: compact(ju64(api, "totalOutputTokens")),
+                },
+                StatRow {
+                    label: "cached".into(),
+                    value: compact(ju64(api, "totalCachedTokens")),
+                },
                 StatRow {
                     label: "cache hit rate".into(),
                     value: cache_hit_rate(
@@ -185,9 +296,18 @@ pub(crate) fn format_session_stats(result: &Value) -> Vec<StatSection> {
                         ju64(api, "totalCachedTokens"),
                     ),
                 },
-                StatRow { label: "total".into(), value: compact(ju64(api, "totalTokens")) },
-                StatRow { label: "requests".into(), value: ju64(api, "requestCount").to_string() },
-                StatRow { label: "cost".into(), value: format!("${:.4}", jf64(api, "totalCost")) },
+                StatRow {
+                    label: "total".into(),
+                    value: compact(ju64(api, "totalTokens")),
+                },
+                StatRow {
+                    label: "requests".into(),
+                    value: ju64(api, "requestCount").to_string(),
+                },
+                StatRow {
+                    label: "cost".into(),
+                    value: format!("${:.4}", jf64(api, "totalCost")),
+                },
             ],
         },
         StatSection {
@@ -206,11 +326,26 @@ pub(crate) fn format_session_stats(result: &Value) -> Vec<StatSection> {
         StatSection {
             title: "Phase tokens".into(),
             rows: vec![
-                StatRow { label: "exploration".into(), value: compact(ju64(phase, "exploration")) },
-                StatRow { label: "execution".into(), value: compact(ju64(phase, "execution")) },
-                StatRow { label: "verification".into(), value: compact(ju64(phase, "verification")) },
-                StatRow { label: "conclusion".into(), value: compact(ju64(phase, "conclusion")) },
-                StatRow { label: "unclassified".into(), value: compact(ju64(phase, "unclassified")) },
+                StatRow {
+                    label: "exploration".into(),
+                    value: compact(ju64(phase, "exploration")),
+                },
+                StatRow {
+                    label: "execution".into(),
+                    value: compact(ju64(phase, "execution")),
+                },
+                StatRow {
+                    label: "verification".into(),
+                    value: compact(ju64(phase, "verification")),
+                },
+                StatRow {
+                    label: "conclusion".into(),
+                    value: compact(ju64(phase, "conclusion")),
+                },
+                StatRow {
+                    label: "unclassified".into(),
+                    value: compact(ju64(phase, "unclassified")),
+                },
             ],
         },
     ]
@@ -244,18 +379,39 @@ pub(crate) fn format_usage_stats(
         StatSection {
             title: "Context".into(),
             rows: vec![
-                StatRow { label: "window".into(), value: k(ctx_window) },
-                StatRow { label: "used".into(), value: format!("{} ({}%)", k(ctx_used), util) },
-                StatRow { label: "remaining".into(), value: k(remaining) },
+                StatRow {
+                    label: "window".into(),
+                    value: k(ctx_window),
+                },
+                StatRow {
+                    label: "used".into(),
+                    value: format!("{} ({}%)", k(ctx_used), util),
+                },
+                StatRow {
+                    label: "remaining".into(),
+                    value: k(remaining),
+                },
             ],
         },
         StatSection {
             title: "API usage (cumulative)".into(),
             rows: vec![
-                StatRow { label: "input".into(), value: k(input) },
-                StatRow { label: "output".into(), value: k(output) },
-                StatRow { label: "cached".into(), value: k(cached) },
-                StatRow { label: "cost".into(), value: format!("${:.4}", cost) },
+                StatRow {
+                    label: "input".into(),
+                    value: k(input),
+                },
+                StatRow {
+                    label: "output".into(),
+                    value: k(output),
+                },
+                StatRow {
+                    label: "cached".into(),
+                    value: k(cached),
+                },
+                StatRow {
+                    label: "cost".into(),
+                    value: format!("${:.4}", cost),
+                },
             ],
         },
     ]
@@ -293,5 +449,75 @@ mod tests {
     #[test]
     fn relative_time_just_now() {
         assert_eq!(relative_time(now_secs()), "just now");
+    }
+
+    // ── cap_head_lines ───────────────────────────────────────────────────
+
+    #[test]
+    fn cap_head_lines_passes_through_short_text() {
+        assert_eq!(cap_head_lines("short", 100), "short");
+    }
+
+    #[test]
+    fn cap_head_lines_backs_up_to_a_line_break() {
+        // A hard cut at 28 would land inside the second list item and leave
+        // the markdown half-open.
+        let text = "# Title\n\n- alpha beta gamma\n- delta epsilon zeta";
+        let out = cap_head_lines(text, 28);
+        assert!(
+            out.starts_with("# Title\n\n- alpha beta gamma"),
+            "kept text should stop at the line break, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn cap_head_lines_never_ends_on_a_bare_list_marker() {
+        // A 30-char budget lands right after the "-" of the second item.
+        let text = "# Title\n\n- alpha beta gamma\n- delta epsilon zeta";
+        let out = cap_head_lines(text, 30);
+        let kept = out.split("\n\n[").next().unwrap();
+        assert!(
+            !kept.trim_end().ends_with('-'),
+            "must not end on a dangling bullet, got: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn cap_head_lines_does_not_split_an_unclosed_fence() {
+        let text = "before\n\n```rust\nfn main() {}\nlet x = 1;\nlet y = 2;\n```\n\nafter";
+        let out = cap_head_lines(text, 20);
+        // The fence starts after the budget, so the prefix must not contain a
+        // stray opening fence with no closing one.
+        let opens = out.matches("```").count();
+        assert_eq!(opens % 2, 0, "unbalanced code fence in: {out:?}");
+    }
+
+    #[test]
+    fn cap_head_lines_keeps_most_of_a_single_long_line() {
+        // No line break within reach of the budget, so we must not give back
+        // almost the whole allowance looking for one.
+        let text = "x".repeat(100);
+        let out = cap_head_lines(&text, 40);
+        let kept = out.split("\n\n[").next().unwrap();
+        assert!(
+            kept.len() >= 30,
+            "single-line text should keep most of itself, kept {}",
+            kept.len()
+        );
+    }
+
+    #[test]
+    fn cap_head_lines_reports_omitted_count() {
+        let text = "a".repeat(2000);
+        let out = cap_head_lines(&text, 100);
+        assert!(out.contains("more chars"), "missing suffix: {out:?}");
+    }
+
+    #[test]
+    fn format_thousands_groups_digits() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(999), "999");
+        assert_eq!(format_thousands(1_000), "1,000");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
     }
 }

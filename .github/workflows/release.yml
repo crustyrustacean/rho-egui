@@ -1,0 +1,95 @@
+name: Release
+
+# Builds a binary for every push to trunk and attaches it to the GitHub
+# release for that tag. This is a desktop app, not a library — the artifact is
+# the product, so a tag without a downloadable binary is not a usable release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Only one release build per ref; a re-push of the same tag should not stack up.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # egui links against system GL/X11 on Linux, which a bare runner has.
+      # Installing them keeps the artifact genuinely runnable rather than one
+      # that only links on a developer's desktop.
+      - name: Install Linux runtime deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dri libxkbcommon0 libx11-6 libxcursor1 libxrandr2 libxi6 libfontconfig1
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          BIN="target/${{ matrix.target }}/release/rho-egui"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$BIN.exe" "dist/rho-egui-${{ matrix.target }}.exe"
+          else
+            cp "$BIN" "dist/rho-egui-${{ matrix.target }}"
+            chmod +x "dist/rho-egui-${{ matrix.target }}"
+          fi
+          (cd dist && sha256sum * > checksums.txt) || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rho-egui-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  # Publish to the GitHub release. Separated from build so all targets
+  # finish before a partial release is created.
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.exe' -o -name 'rho-egui-*' \) \
+            ! -name '*.txt' -exec cp {} release-assets/ \;
+          cd artifacts/*/ 2>/dev/null || true
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*

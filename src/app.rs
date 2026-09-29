@@ -10,7 +10,7 @@ use crate::ui::chat_view::{BlockAction, render_block};
 use crate::ui::modals::{BranchAction, ContextAction, ModalId};
 use crate::ui::widgets;
 use crate::util::formatting::{
-    format_secs, format_session_stats, format_usage_stats, StatsContent,
+    StatsContent, format_secs, format_session_stats, format_usage_stats,
 };
 use crate::util::json::{jbool, jf64, jstr, jstr_opt, ju64};
 
@@ -36,12 +36,17 @@ const DEFAULT_ZOOM: f32 = 1.45;
 /// that proportional scaling alone can leave it unreadable.
 const SMALL_FLOOR: f32 = 12.0;
 
+/// Zoom bounds. `Ctrl+=` / `Ctrl=-` clamp to these, and `RHO_TEXT_ZOOM` is
+/// rejected outside them, so the menu bar only has to survive this range.
+const MIN_ZOOM: f32 = 0.5;
+const MAX_ZOOM: f32 = 4.0;
+
 /// Read the text zoom from the environment, falling back to [`DEFAULT_ZOOM`].
 fn zoom_from_env() -> f32 {
     std::env::var("RHO_TEXT_ZOOM")
         .ok()
         .and_then(|raw| raw.trim().parse::<f32>().ok())
-        .filter(|z| (0.5..=4.0).contains(z))
+        .filter(|z| (MIN_ZOOM..=MAX_ZOOM).contains(z))
         .unwrap_or(DEFAULT_ZOOM)
 }
 
@@ -97,6 +102,12 @@ pub struct App {
 
     // Stats cache
     stats_body: StatsContent,
+
+    // Loaded-extensions cache. Kept separate from `stats_body` so the two
+    // modals can never show each other's content: they share a body type, and
+    // a single shared field let the extension list render under a
+    // "Session stats" heading.
+    extensions_body: StatsContent,
 
     // Modal control
     open_modal: ModalId,
@@ -157,6 +168,7 @@ impl Default for App {
             models: Vec::new(),
             model_filter_text: String::new(),
             stats_body: StatsContent::text(String::new()),
+            extensions_body: StatsContent::text(String::new()),
             open_modal: ModalId::None,
             resume_latest_requested: false,
             context_modal_requested: false,
@@ -172,6 +184,12 @@ impl Default for App {
 }
 
 impl App {
+    /// Build the app. The `Context` is taken so fonts can be installed before
+    /// the first frame runs; see [`crate::ui::fonts`].
+    pub fn new(_ctx: egui::Context) -> Self {
+        App::default()
+    }
+
     fn start_working(&mut self) {
         self.busy = true;
         self.working_start = Some(Instant::now());
@@ -486,9 +504,7 @@ impl App {
                                     .get("tools")
                                     .and_then(|t| t.as_array())
                                     .map(|t| {
-                                        t.iter()
-                                            .filter_map(|n| n.as_str())
-                                            .collect::<Vec<_>>()
+                                        t.iter().filter_map(|n| n.as_str()).collect::<Vec<_>>()
                                     })
                                     .unwrap_or_default();
                                 if tools.is_empty() {
@@ -503,8 +519,10 @@ impl App {
                 } else {
                     serde_json::to_string_pretty(&result).unwrap_or_default()
                 };
-                self.stats_body = StatsContent::text(body);
-                self.open_modal = ModalId::Stats;
+                // Its own field and its own modal: this is the extension
+                // inventory, not token usage.
+                self.extensions_body = StatsContent::text(body);
+                self.open_modal = ModalId::Extensions;
             }
             RequestKind::Fork => {
                 // A fork registers a new cursor but leaves the active one
@@ -537,12 +555,10 @@ impl App {
                                 let cursor_id = jstr(Some(b), "cursorId");
                                 // `name` is null until the user labels it; fall
                                 // back to a short id so rows are never blank.
-                                let named = jstr_opt(Some(b), "name")
-                                    .filter(|n| !n.trim().is_empty());
+                                let named =
+                                    jstr_opt(Some(b), "name").filter(|n| !n.trim().is_empty());
                                 widgets::BranchEntry {
-                                    label: named
-                                        .clone()
-                                        .unwrap_or_else(|| short_id(&cursor_id)),
+                                    label: named.clone().unwrap_or_else(|| short_id(&cursor_id)),
                                     is_named: named.is_some(),
                                     cursor_id,
                                     active: jbool(Some(b), "active"),
@@ -718,10 +734,10 @@ impl eframe::App for App {
                 zoom_out = i.consume_key(egui::Modifiers::CTRL, egui::Key::Minus);
             });
             if zoom_in {
-                self.text_zoom = (self.text_zoom + 0.1).min(4.0);
+                self.text_zoom = (self.text_zoom + 0.1).min(MAX_ZOOM);
             }
             if zoom_out {
-                self.text_zoom = (self.text_zoom - 0.1).max(0.5);
+                self.text_zoom = (self.text_zoom - 0.1).max(MIN_ZOOM);
             }
         }
         {
@@ -761,131 +777,155 @@ impl eframe::App for App {
                     if let Some(branch) = widgets::active_branch()
                         && branch.is_named
                     {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(0x4f, 0x4f, 0x4f),
-                            branch.label,
-                        );
+                        ui.colored_label(egui::Color32::from_rgb(0x4f, 0x4f, 0x4f), branch.label);
                     }
                 });
             });
 
         // ── 4. Menu bar ───────────────────────────────────────────────────
+        // A real `MenuBar` of dropdowns rather than a row of buttons. The
+        // twelve flat buttons wrapped onto a second line as soon as the text
+        // zoom went above ~1.0, because their combined width exceeds the
+        // window at 1024px. Grouping them means the bar is a fixed five
+        // labels wide and cannot wrap at any zoom level.
         egui::Panel::top("menu_bar")
             .frame(egui::Frame {
                 fill: egui::Color32::from_rgb(0x15, 0x15, 0x1a),
                 ..Default::default()
             })
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let btn =
-                        |ui: &mut egui::Ui, label: &str| -> bool { ui.button(label).clicked() };
-                    if btn(ui, "Session") {
+                let btn = |ui: &mut egui::Ui, label: &str| -> bool { ui.button(label).clicked() };
+
+                // All the "no agent → complain" paths share this shape.
+                macro_rules! require_agent {
+                    ($req:expr) => {
                         if let Some(agent) = &mut self.agent {
-                            let _ = agent.list_sessions();
+                            let _ = $req(agent);
                         } else {
                             self.push_block(ChatBlock::Info("not connected.".into()));
                         }
-                    }
-                    if btn(ui, "Resume Last") {
-                        self.resume_latest_requested = true;
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.list_sessions();
-                        } else {
-                            self.push_block(ChatBlock::Info("not connected.".into()));
-                        }
-                    }
-                    if btn(ui, "Model") {
-                        self.model_filter_text.clear();
-                        self.sync_model_list();
-                        self.open_modal = ModalId::ModelPicker;
-                    }
-                    if btn(ui, "Providers") {
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.list_providers();
-                        } else {
-                            self.push_block(ChatBlock::Info("not connected.".into()));
-                        }
-                    }
-                    if btn(ui, "Extensions") {
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.list_extensions();
-                        } else {
-                            self.push_block(ChatBlock::Info("not connected.".into()));
-                        }
-                    }
-                    if btn(ui, "Tools") {
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.list_tools();
-                        } else {
-                            self.push_block(ChatBlock::Info("not connected.".into()));
-                        }
-                    }
-                    if btn(ui, "Branches") {
-                        self.branch_selected = None;
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.list_branches();
-                        } else {
-                            self.push_block(ChatBlock::Info("not connected.".into()));
-                        }
-                    }
-                    if btn(ui, "Reload") {
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.reload_extensions();
-                            self.push_block(ChatBlock::Info("Reloading extensions…".into()));
-                        } else {
-                            self.push_block(ChatBlock::Info("not connected.".into()));
-                        }
-                    }
-                    if btn(ui, "Context") {
-                        if self.busy {
-                            // Render from cached usage data so the modal opens instantly
-                            let u = &self.usage;
-                            self.context_body = StatsContent::sections(format_usage_stats(
-                                u.input, u.output, u.cached, u.cost,
-                                u.ctx_used, u.ctx_window, u.util,
-                            ));
-                            self.open_modal = ModalId::Context;
-                        } else {
-                            match &mut self.agent {
-                                Some(agent) => {
-                                    self.context_modal_requested = true;
-                                    let _ = agent.get_session_stats();
+                    };
+                }
+
+                // Horizontal scroll so the bar can never wrap to a second row.
+                // At the 4x zoom ceiling the five labels need ~1051px, which is
+                // wider than the 1024px default window; scrolling degrades
+                // gracefully where wrapping breaks the layout.
+                egui::ScrollArea::horizontal()
+                    .id_salt("menu_bar_scroll")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        egui::MenuBar::new().ui(ui, |ui| {
+                            ui.menu_button("Session", |ui| {
+                                if btn(ui, "List sessions…") {
+                                    self.resume_latest_requested = false;
+                                    require_agent!(|a: &mut RhoAgent| a.list_sessions());
                                 }
-                                None => self.push_block(ChatBlock::Info("not connected.".into())),
-                            }
-                        }
-                    }
-                    if btn(ui, "Restart") {
-                        self.restart_agent(ctx.clone());
-                    }
-                    if btn(ui, "Abort") {
-                        if !self.busy {
-                            self.push_block(ChatBlock::Info("nothing to abort.".into()));
-                        } else if let Some(agent) = &mut self.agent {
-                            let _ = agent.abort();
-                            self.working_state = "aborting".into();
-                        }
-                    }
-                    if btn(ui, "Stats") {
-                        if let Some(agent) = &mut self.agent {
-                            let _ = agent.get_session_stats();
-                        }
-                        self.open_modal = ModalId::Stats;
-                    }
-                    if btn(ui, "Help") {
-                        self.open_modal = ModalId::Help;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if btn(ui, "Quit") {
-                            // Close the viewport rather than calling
-                            // `process::exit`, which would skip `Drop for
-                            // RhoAgent` and orphan the rho child (leaving it
-                            // running with its stdin/stdout pipes still open).
-                            // Drop then kills and reaps it cleanly.
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+                                if btn(ui, "Resume last") {
+                                    self.resume_latest_requested = true;
+                                    require_agent!(|a: &mut RhoAgent| a.list_sessions());
+                                }
+                            });
+
+                            ui.menu_button("Model", |ui| {
+                                if btn(ui, "Choose model…") {
+                                    self.model_filter_text.clear();
+                                    self.sync_model_list();
+                                    self.open_modal = ModalId::ModelPicker;
+                                }
+                                if btn(ui, "Providers…") {
+                                    require_agent!(|a: &mut RhoAgent| a.list_providers());
+                                }
+                            });
+
+                            ui.menu_button("Extensions", |ui| {
+                                if btn(ui, "List loaded…") {
+                                    require_agent!(|a: &mut RhoAgent| a.list_extensions());
+                                }
+                                if btn(ui, "Reload from disk") {
+                                    require_agent!(|a: &mut RhoAgent| a.reload_extensions());
+                                    self.push_block(ChatBlock::Info(
+                                        "Reloading extensions…".into(),
+                                    ));
+                                }
+                            });
+
+                            ui.menu_button("Agent", |ui| {
+                                if btn(ui, "Tools…") {
+                                    require_agent!(|a: &mut RhoAgent| a.list_tools());
+                                }
+                                if btn(ui, "Branches…") {
+                                    self.branch_selected = None;
+                                    require_agent!(|a: &mut RhoAgent| a.list_branches());
+                                }
+                                if btn(ui, "Restart") {
+                                    self.restart_agent(ctx.clone());
+                                }
+                                if btn(ui, "Abort") {
+                                    if !self.busy {
+                                        self.push_block(ChatBlock::Info(
+                                            "nothing to abort.".into(),
+                                        ));
+                                    } else if let Some(agent) = &mut self.agent {
+                                        let _ = agent.abort();
+                                        self.working_state = "aborting".into();
+                                    }
+                                }
+                            });
+
+                            ui.menu_button("View", |ui| {
+                                if btn(ui, "Context…") {
+                                    if self.busy {
+                                        // Render from cached usage data so the modal
+                                        // opens instantly.
+                                        let u = &self.usage;
+                                        self.context_body =
+                                            StatsContent::sections(format_usage_stats(
+                                                u.input,
+                                                u.output,
+                                                u.cached,
+                                                u.cost,
+                                                u.ctx_used,
+                                                u.ctx_window,
+                                                u.util,
+                                            ));
+                                        self.open_modal = ModalId::Context;
+                                    } else {
+                                        match &mut self.agent {
+                                            Some(agent) => {
+                                                self.context_modal_requested = true;
+                                                let _ = agent.get_session_stats();
+                                            }
+                                            None => self.push_block(ChatBlock::Info(
+                                                "not connected.".into(),
+                                            )),
+                                        }
+                                    }
+                                }
+                                if btn(ui, "Stats…") {
+                                    require_agent!(|a: &mut RhoAgent| a.get_session_stats());
+                                    self.open_modal = ModalId::Stats;
+                                }
+                                if btn(ui, "Help") {
+                                    self.open_modal = ModalId::Help;
+                                }
+                            });
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if btn(ui, "Quit") {
+                                        // Close the viewport rather than calling
+                                        // `process::exit`, which would skip `Drop for
+                                        // RhoAgent` and orphan the rho child (leaving it
+                                        // running with its stdin/stdout pipes still open).
+                                        // Drop then kills and reaps it cleanly.
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                },
+                            );
+                        });
                     });
-                });
             });
 
         // ── 5. Bottom panel: Working line + Input + Footer ────────────────
@@ -948,8 +988,7 @@ impl eframe::App for App {
 
                     // Only consume keyboard events for the main input if it has focus,
                     // so the redirect text box can also use Enter/Shift+Enter.
-                    let main_has_focus =
-                        ui.memory(|m| m.focused() == Some(resp.id));
+                    let main_has_focus = ui.memory(|m| m.focused() == Some(resp.id));
                     if main_has_focus {
                         if ctx
                             .input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter))
@@ -1061,6 +1100,7 @@ impl eframe::App for App {
                 ModalId::Help => "Help",
                 ModalId::Context => "Context management",
                 ModalId::Tools => "Registered tools",
+                ModalId::Extensions => "Loaded extensions",
                 ModalId::Branches => "Branches",
                 ModalId::ResumeConfirm(..) => "Resume last session?",
                 ModalId::None => unreachable!(),
@@ -1085,97 +1125,106 @@ impl eframe::App for App {
                 win = win.open(&mut open_flag);
             }
             win.show(&ctx, |ui| {
-                    match &open {
-                        ModalId::ModelPicker => {
-                            crate::ui::modals::model_picker(
-                                ui,
-                                &mut self.model_filter_text,
-                                &mut picked_model,
-                            );
-                        }
-                        ModalId::SessionPicker => {
-                            crate::ui::modals::session_picker(ui, &mut picked_session);
-                        }
-                        ModalId::ProviderInfo => crate::ui::modals::provider_info(ui),
-                        ModalId::Stats => crate::ui::modals::stats_modal(ui, &self.stats_body),
-                        ModalId::Help => crate::ui::modals::help_modal(ui),
-                        ModalId::Tools => crate::ui::modals::tools_modal(ui),
-                        ModalId::ResumeConfirm(path, mtime, count) => {
-                            crate::ui::modals::resume_confirm(ui, path, *mtime, *count);
-                        }
-                        ModalId::None => unreachable!(),
-                        ModalId::Context => {} // handled below
-                        ModalId::Branches => {}
-                    }
-                    // Context modal: action buttons return a ContextAction
-                    if let ModalId::Context = &open {
-                        if let Some(action) =
-                            crate::ui::modals::context_modal(ui, &self.context_body)
-                        {
-                            close_modal = true;
-                            if let Some(agent) = &mut self.agent {
-                                match action {
-                                    ContextAction::Compact => { let _ = agent.compact(); }
-                                    ContextAction::Clear => { let _ = agent.clear(); }
-                                    ContextAction::NewSession => { let _ = agent.new_session(); }
-                                }
-                            }
-                        }
-                    }
-                    // Branch modal: returns a BranchAction
-                    if let ModalId::Branches = &open {
-                        let mut action: Option<BranchAction> = None;
-                        crate::ui::modals::branch_modal(
+                match &open {
+                    ModalId::ModelPicker => {
+                        crate::ui::modals::model_picker(
                             ui,
-                            &mut self.branch_name_input,
-                            &mut self.branch_selected,
-                            &mut action,
+                            &mut self.model_filter_text,
+                            &mut picked_model,
                         );
-                        if let Some(action) = action {
-                            if let Some(agent) = &mut self.agent {
-                                match action {
-                                    BranchAction::Fork => { let _ = agent.fork(); }
-                                    BranchAction::Switch(i) => {
-                                        if let Some(b) = widgets::get_branch(i) {
-                                            let _ = agent.switch_branch(&b.cursor_id);
-                                            // The modal reopens from the
-                                            // ListBranches response, which
-                                            // re-reads the active flag.
-                                            self.branch_selected = None;
-                                        }
-                                    }
-                                    BranchAction::Name(i, name) => {
-                                        if let Some(b) = widgets::get_branch(i) {
-                                            let _ = agent.name_branch(&b.cursor_id, &name);
-                                        }
-                                    }
+                    }
+                    ModalId::SessionPicker => {
+                        crate::ui::modals::session_picker(ui, &mut picked_session);
+                    }
+                    ModalId::ProviderInfo => crate::ui::modals::provider_info(ui),
+                    ModalId::Stats => crate::ui::modals::stats_modal(ui, &self.stats_body),
+                    ModalId::Extensions => {
+                        crate::ui::modals::extensions_modal(ui, &self.extensions_body)
+                    }
+                    ModalId::Help => crate::ui::modals::help_modal(ui),
+                    ModalId::Tools => crate::ui::modals::tools_modal(ui),
+                    ModalId::ResumeConfirm(path, mtime, count) => {
+                        crate::ui::modals::resume_confirm(ui, path, *mtime, *count);
+                    }
+                    ModalId::None => unreachable!(),
+                    ModalId::Context => {} // handled below
+                    ModalId::Branches => {}
+                }
+                // Context modal: action buttons return a ContextAction
+                if let ModalId::Context = &open
+                    && let Some(action) = crate::ui::modals::context_modal(ui, &self.context_body)
+                {
+                    close_modal = true;
+                    if let Some(agent) = &mut self.agent {
+                        match action {
+                            ContextAction::Compact => {
+                                let _ = agent.compact();
+                            }
+                            ContextAction::Clear => {
+                                let _ = agent.clear();
+                            }
+                            ContextAction::NewSession => {
+                                let _ = agent.new_session();
+                            }
+                        }
+                    }
+                }
+                // Branch modal: returns a BranchAction
+                if let ModalId::Branches = &open {
+                    let mut action: Option<BranchAction> = None;
+                    crate::ui::modals::branch_modal(
+                        ui,
+                        &mut self.branch_name_input,
+                        &mut self.branch_selected,
+                        &mut action,
+                    );
+                    if let Some(action) = action
+                        && let Some(agent) = &mut self.agent
+                    {
+                        match action {
+                            BranchAction::Fork => {
+                                let _ = agent.fork();
+                            }
+                            BranchAction::Switch(i) => {
+                                if let Some(b) = widgets::get_branch(i) {
+                                    let _ = agent.switch_branch(&b.cursor_id);
+                                    // The modal reopens from the
+                                    // ListBranches response, which
+                                    // re-reads the active flag.
+                                    self.branch_selected = None;
+                                }
+                            }
+                            BranchAction::Name(i, name) => {
+                                if let Some(b) = widgets::get_branch(i) {
+                                    let _ = agent.name_branch(&b.cursor_id, &name);
                                 }
                             }
                         }
                     }
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            match &open {
-                                ModalId::ResumeConfirm(path, ..) => {
-                                    if ui.button("Cancel").clicked() {
-                                        close_modal = true;
-                                    }
-                                    if ui.button("Resume").clicked() {
-                                        if let Some(agent) = &mut self.agent {
-                                            let _ = agent.resume_session(path);
-                                        }
-                                        close_modal = true;
-                                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        match &open {
+                            ModalId::ResumeConfirm(path, ..) => {
+                                if ui.button("Cancel").clicked() {
+                                    close_modal = true;
                                 }
-                                _ => {
-                                    if ui.button("Close").clicked() {
-                                        close_modal = true;
+                                if ui.button("Resume").clicked() {
+                                    if let Some(agent) = &mut self.agent {
+                                        let _ = agent.resume_session(path);
                                     }
+                                    close_modal = true;
                                 }
                             }
-                        });
+                            _ => {
+                                if ui.button("Close").clicked() {
+                                    close_modal = true;
+                                }
+                            }
+                        }
                     });
                 });
+            });
 
             // `open_flag` is flipped to false by egui when the user clicks
             // outside a dismissible window or presses Esc.
@@ -1239,7 +1288,8 @@ mod tests {
 
         let final_style = ctx.style_of(theme);
         let body = final_style.text_styles[&egui::TextStyle::Body].size;
-        let expected = egui::Style::default().text_styles[&egui::TextStyle::Body].size * DEFAULT_ZOOM;
+        let expected =
+            egui::Style::default().text_styles[&egui::TextStyle::Body].size * DEFAULT_ZOOM;
         assert!(
             (body - expected).abs() < 0.01,
             "Body drifted to {body}, expected {expected} — the scale is compounding"
@@ -1262,5 +1312,75 @@ mod tests {
             small >= SMALL_FLOOR,
             "Small is {small}, below the {SMALL_FLOOR} floor"
         );
+    }
+
+    /// The menu bar must never wrap to a second row, at any allowed zoom.
+    ///
+    /// It used to be twelve flat buttons in a `horizontal()`, which wrapped
+    /// `Stats / Help / Quit` onto a second row as soon as the text zoom went
+    /// above ~1.0. It is now five dropdown labels inside a horizontal
+    /// `ScrollArea`, so overflow scrolls rather than wrapping.
+    ///
+    /// The guarantee this test pins is the one that was broken: the bar's
+    /// content must fit the default 1024px window at the *default* zoom, so no
+    /// scrolling is needed in normal use. Above that it scrolls, which is why
+    /// the higher zooms are measured but not asserted to fit.
+    #[test]
+    fn menu_bar_fits_without_scrolling_at_default_zoom() {
+        // 1024px is the default window width set in `main.rs`.
+        const WINDOW_WIDTH: f32 = 1024.0;
+
+        // At the default zoom the bar must fit outright. The old 12-button
+        // layout needed well over this, which is what wrapped.
+        let default_width = menu_bar_width(DEFAULT_ZOOM);
+        assert!(
+            default_width <= WINDOW_WIDTH,
+            "at the default zoom the menu bar needs ~{default_width:.0}px, which does not fit a \
+             {WINDOW_WIDTH:.0}px window and would scroll or wrap"
+        );
+
+        // The bar must get no wider than the window at any allowed zoom,
+        // otherwise the whole panel is unusable. Scrolling keeps it usable.
+        for zoom in [MIN_ZOOM, 1.0, DEFAULT_ZOOM, MAX_ZOOM] {
+            let width = menu_bar_width(zoom);
+            assert!(
+                width <= WINDOW_WIDTH * 1.5,
+                "at zoom {zoom} the menu bar needs ~{width:.0}px, which is more than 1.5x the \
+                 {WINDOW_WIDTH:.0}px window — too wide to scroll usefully"
+            );
+        }
+    }
+
+    /// Measure the menu bar's natural width at a given text zoom.
+    fn menu_bar_width(zoom: f32) -> f32 {
+        const BAR_LABELS: [&str; 6] = ["Session", "Model", "Extensions", "Agent", "View", "Quit"];
+
+        let ctx = egui::Context::default();
+        crate::ui::fonts::install(&ctx);
+        let theme = egui::Theme::from_dark_mode(true);
+        let mut style = ctx.style_of(theme).as_ref().clone();
+        apply_text_scale(&mut style, zoom);
+        ctx.set_style_of(theme, Arc::new(style));
+
+        // egui does not build its font atlas until the first real frame, and
+        // `fonts_mut` panics before that. A no-op frame forces it.
+        let mut out = ctx.run_ui(Default::default(), |_| {});
+        out.textures_delta.clear();
+
+        let body = ctx.style_of(theme).text_styles[&egui::TextStyle::Body].clone();
+        // Sum the label widths, then add per-button padding and inter-item
+        // spacing. `fonts_mut` is needed because laying out text takes
+        // `&mut self`.
+        let text_width: f32 = ctx.fonts_mut(|f| {
+            BAR_LABELS
+                .iter()
+                .map(|l| {
+                    f.layout_delayed_color(l.to_string(), body.clone(), f32::INFINITY)
+                        .size()
+                        .x
+                })
+                .sum()
+        });
+        text_width + BAR_LABELS.len() as f32 * 24.0
     }
 }
