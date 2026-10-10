@@ -103,12 +103,6 @@ pub struct App {
     // Stats cache
     stats_body: StatsContent,
 
-    // Loaded-extensions cache. Kept separate from `stats_body` so the two
-    // modals can never show each other's content: they share a body type, and
-    // a single shared field let the extension list render under a
-    // "Session stats" heading.
-    extensions_body: StatsContent,
-
     // Modal control
     open_modal: ModalId,
 
@@ -168,7 +162,6 @@ impl Default for App {
             models: Vec::new(),
             model_filter_text: String::new(),
             stats_body: StatsContent::text(String::new()),
-            extensions_body: StatsContent::text(String::new()),
             open_modal: ModalId::None,
             resume_latest_requested: false,
             context_modal_requested: false,
@@ -479,50 +472,6 @@ impl App {
                     self.context_body = self.stats_body.clone();
                     self.open_modal = ModalId::Context;
                 }
-            }
-            RequestKind::ReloadExtensions => {
-                let reloaded = ju64(Some(&result), "reloaded");
-                let added = ju64(Some(&result), "added");
-                let removed = ju64(Some(&result), "removed");
-                self.push_block(ChatBlock::Info(format!(
-                    "✓ extensions reloaded (+{added} ~{reloaded} -{removed})"
-                )));
-            }
-            RequestKind::ListExtensions => {
-                // Current shape is `{ name, tools: [String] }`; older rho sent
-                // `status`/`toolCount`, which we no longer read. Fall back to
-                // pretty-printing the whole response if the shape is unknown,
-                // so a future schema change is visible rather than silent.
-                let body = if let Some(arr) = result.get("extensions").and_then(|x| x.as_array()) {
-                    if arr.is_empty() {
-                        "No extensions installed.".to_string()
-                    } else {
-                        arr.iter()
-                            .map(|e| {
-                                let name = jstr(Some(e), "name");
-                                let tools = e
-                                    .get("tools")
-                                    .and_then(|t| t.as_array())
-                                    .map(|t| {
-                                        t.iter().filter_map(|n| n.as_str()).collect::<Vec<_>>()
-                                    })
-                                    .unwrap_or_default();
-                                if tools.is_empty() {
-                                    format!("  {name}")
-                                } else {
-                                    format!("  {name} ({} tools)", tools.len())
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    }
-                } else {
-                    serde_json::to_string_pretty(&result).unwrap_or_default()
-                };
-                // Its own field and its own modal: this is the extension
-                // inventory, not token usage.
-                self.extensions_body = StatsContent::text(body);
-                self.open_modal = ModalId::Extensions;
             }
             RequestKind::Fork => {
                 // A fork registers a new cursor but leaves the active one
@@ -838,18 +787,6 @@ impl eframe::App for App {
                                 }
                             });
 
-                            ui.menu_button("Extensions", |ui| {
-                                if btn(ui, "List loaded…") {
-                                    require_agent!(|a: &mut RhoAgent| a.list_extensions());
-                                }
-                                if btn(ui, "Reload from disk") {
-                                    require_agent!(|a: &mut RhoAgent| a.reload_extensions());
-                                    self.push_block(ChatBlock::Info(
-                                        "Reloading extensions…".into(),
-                                    ));
-                                }
-                            });
-
                             ui.menu_button("Agent", |ui| {
                                 if btn(ui, "Tools…") {
                                     require_agent!(|a: &mut RhoAgent| a.list_tools());
@@ -1100,7 +1037,6 @@ impl eframe::App for App {
                 ModalId::Help => "Help",
                 ModalId::Context => "Context management",
                 ModalId::Tools => "Registered tools",
-                ModalId::Extensions => "Loaded extensions",
                 ModalId::Branches => "Branches",
                 ModalId::ResumeConfirm(..) => "Resume last session?",
                 ModalId::None => unreachable!(),
@@ -1138,9 +1074,6 @@ impl eframe::App for App {
                     }
                     ModalId::ProviderInfo => crate::ui::modals::provider_info(ui),
                     ModalId::Stats => crate::ui::modals::stats_modal(ui, &self.stats_body),
-                    ModalId::Extensions => {
-                        crate::ui::modals::extensions_modal(ui, &self.extensions_body)
-                    }
                     ModalId::Help => crate::ui::modals::help_modal(ui),
                     ModalId::Tools => crate::ui::modals::tools_modal(ui),
                     ModalId::ResumeConfirm(path, mtime, count) => {
@@ -1353,7 +1286,7 @@ mod tests {
 
     /// Measure the menu bar's natural width at a given text zoom.
     fn menu_bar_width(zoom: f32) -> f32 {
-        const BAR_LABELS: [&str; 6] = ["Session", "Model", "Extensions", "Agent", "View", "Quit"];
+        const BAR_LABELS: [&str; 5] = ["Session", "Model", "Agent", "View", "Quit"];
 
         let ctx = egui::Context::default();
         crate::ui::fonts::install(&ctx);

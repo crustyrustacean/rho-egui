@@ -208,20 +208,6 @@ impl RhoAgent {
             serde_json::json!({}),
         )
     }
-    pub fn reload_extensions(&mut self) -> Result<(), String> {
-        self.request(
-            RequestKind::ReloadExtensions,
-            "reloadExtensions",
-            serde_json::json!({}),
-        )
-    }
-    pub fn list_extensions(&mut self) -> Result<(), String> {
-        self.request(
-            RequestKind::ListExtensions,
-            "listExtensions",
-            serde_json::json!({}),
-        )
-    }
     pub fn list_tools(&mut self) -> Result<(), String> {
         self.request(RequestKind::ListTools, "listTools", serde_json::json!({}))
     }

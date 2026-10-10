@@ -12,8 +12,6 @@ pub(crate) enum RequestKind {
     ListSessions,
     SetModel,
     ResumeSession,
-    ReloadExtensions,
-    ListExtensions,
     ListTools,
     Compact,
     Clear,
