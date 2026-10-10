@@ -20,7 +20,6 @@ design; this is the front end.
 - **Tool inspector** — browse registered tool schemas, risk levels, and parameters
 - **Provider info** — view configured providers and their reachability
 - **Usage tracking** — token counts, cost, cache hit rate, and context window utilization in the footer
-- **Extensions** — list and reload rho extensions at runtime
 
 ## Getting Started
 

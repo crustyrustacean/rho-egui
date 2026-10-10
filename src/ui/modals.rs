@@ -15,7 +15,6 @@ pub(crate) enum ModalId {
     Help,
     Context,
     Tools,
-    Extensions,
     Branches,
     ResumeConfirm(String, u64, u64),
 }
@@ -165,26 +164,6 @@ pub(crate) fn stats_modal(ui: &mut Ui, content: &StatsContent) {
     });
 }
 
-/// Render the loaded-extensions modal.
-///
-/// Separate from [`stats_modal`] because it is a different list entirely:
-/// the extension inventory, not token usage. Reusing the stats modal showed
-/// the extension list under a "Session stats" heading.
-pub(crate) fn extensions_modal(ui: &mut Ui, content: &StatsContent) {
-    modal_frame(ui, |ui| {
-        ui.set_min_width(420.0);
-        ui.colored_label(
-            egui::Color32::from_rgb(0xea, 0xea, 0xea),
-            "Loaded extensions",
-        );
-        egui::ScrollArea::vertical()
-            .max_height(450.0)
-            .show(ui, |ui| {
-                render_stats_content(ui, content);
-            });
-    });
-}
-
 /// Render the help modal.
 pub(crate) fn help_modal(ui: &mut Ui) {
     modal_frame(ui, |ui| {
@@ -204,10 +183,8 @@ pub(crate) fn help_modal(ui: &mut Ui) {
                      Resume Last — quickly resume the most recent session\n  \
                      Model — pick a model from the scrollable list\n  \
                      Providers — view configured providers and their status\n  \
-                     Extensions — list installed extensions\n  \
                      Tools — inspect registered tool schemas\n  \
                      Branches — fork, switch, and label session branches\n  \
-                     Reload — reload extensions from disk\n  \
                      Context — inspect context usage; Compact, Clear, or start a New Session\n  \
                      Restart — kill and re-spawn the rho subprocess\n  \
                      Abort — cancel the current agent turn\n  \
@@ -432,16 +409,6 @@ mod tests {
 
     /// Every modal must have its own `ModalId` and its own window title.
     ///
-    /// The extension list used to be rendered by `stats_modal` under a
-    /// "Session stats" heading, so clicking Extensions → "List loaded…" opened
-    /// a window titled "Session stats". This guards the two things that caused
-    /// it: reusing another modal's id, and reusing another modal's body field.
-    #[test]
-    fn extensions_modal_has_its_own_id_and_title() {
-        // A distinct variant, not an alias for Stats.
-        assert_ne!(ModalId::Extensions, ModalId::Stats);
-    }
-
     /// Titles must be unique across modals, since they are what the user sees
     /// in the window header.
     #[test]
@@ -451,7 +418,6 @@ mod tests {
             (ModalId::SessionPicker, "Resume session"),
             (ModalId::ProviderInfo, "Providers"),
             (ModalId::Stats, "Session stats"),
-            (ModalId::Extensions, "Loaded extensions"),
             (ModalId::Help, "Help"),
             (ModalId::Context, "Context management"),
             (ModalId::Tools, "Registered tools"),

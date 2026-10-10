@@ -145,7 +145,7 @@ pub(crate) struct StatSection {
 }
 
 /// Body content for the Stats/Context modal — either structured table
-/// sections or free-form text (e.g. the extensions list).
+/// sections or free-form text.
 #[derive(Clone, Debug)]
 pub(crate) enum StatsContent {
     Sections(Vec<StatSection>),
