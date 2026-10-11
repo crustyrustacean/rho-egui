@@ -1,3 +1,9 @@
+## [1.0.1] - 2026-10-10
+
+### ♻️ Refactor
+
+- Remove extension UI — `listExtensions`/`reloadExtensions` no longer exist on rho's wire surface (rho-coding-agent PR #88)
+
 ## [1.0.0] - 2026-09-29
 
 ### 🚀 Features
